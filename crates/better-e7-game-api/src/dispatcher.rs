@@ -562,6 +562,27 @@ mod tests {
     }
 
     #[test]
+    fn stops_an_active_task_before_the_next_tick() {
+        let updates = Arc::new(Mutex::new(0));
+        let task_id = TaskId::new("daily").unwrap();
+        let mut dispatcher = Dispatcher::new(id("home"));
+        dispatcher
+            .register_task(CompletingTask {
+                id: task_id.clone(),
+                updates: Arc::clone(&updates),
+            })
+            .unwrap();
+        dispatcher.start_task(&task_id, &frame(), &[]).unwrap();
+
+        let stopped = dispatcher.stop_task(&frame(), &[]).unwrap();
+        dispatcher.tick(&frame(), &[]).unwrap();
+
+        assert_eq!(stopped.task_event, Some(TaskEvent::Stopped(task_id)));
+        assert!(dispatcher.active_task_id().is_none());
+        assert_eq!(*updates.lock().unwrap(), 0);
+    }
+
+    #[test]
     fn consuming_trigger_suspends_the_active_task_for_the_tick() {
         let updates = Arc::new(Mutex::new(0));
         let task_id = TaskId::new("daily").unwrap();
