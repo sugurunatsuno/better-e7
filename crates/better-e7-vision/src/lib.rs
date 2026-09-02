@@ -130,12 +130,8 @@ fn find_best_match(frame: &Frame, template: &Frame, roi: PixelRect) -> Option<(u
     }
     let max_x = roi.right().checked_sub(template.width())?;
     let max_y = roi.bottom().checked_sub(template.height())?;
-    let scan_step = (frame.width() / 480)
-        .max(frame.height() / 270)
-        .max(1) as usize;
-    let sample_step = (template.width() / 16)
-        .max(template.height() / 16)
-        .max(1) as usize;
+    let scan_step = (frame.width() / 480).max(frame.height() / 270).max(1) as usize;
+    let sample_step = (template.width() / 16).max(template.height() / 16).max(1) as usize;
     let mut best = (roi.x, roi.y, -1.0_f32);
 
     for y in (roi.y..=max_y).step_by(scan_step) {
@@ -245,7 +241,10 @@ impl fmt::Display for TemplateMatcherError {
             }
             Self::EmptyTemplate => formatter.write_str("template must not be empty"),
             Self::InvalidThreshold(value) => {
-                write!(formatter, "template threshold must be within 0.0..=1.0: {value}")
+                write!(
+                    formatter,
+                    "template threshold must be within 0.0..=1.0: {value}"
+                )
             }
         }
     }
@@ -267,15 +266,7 @@ mod tests {
     use super::*;
 
     fn rgb_frame(width: u32, height: u32, pixels: Vec<u8>) -> Frame {
-        Frame::new(
-            0,
-            Instant::now(),
-            width,
-            height,
-            PixelFormat::Rgb8,
-            pixels,
-        )
-        .unwrap()
+        Frame::new(0, Instant::now(), width, height, PixelFormat::Rgb8, pixels).unwrap()
     }
 
     #[test]
@@ -290,8 +281,8 @@ mod tests {
                 .copy_from_slice(&template_pixels[source..source + 6]);
         }
         let frame = rgb_frame(8, 6, frame_pixels);
-        let matcher = TemplateMatcher::new("target", template, 0.99, NormalizedRect::full())
-            .unwrap();
+        let matcher =
+            TemplateMatcher::new("target", template, 0.99, NormalizedRect::full()).unwrap();
 
         let detections = matcher.recognize(&frame).unwrap();
 

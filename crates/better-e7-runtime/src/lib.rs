@@ -671,8 +671,8 @@ impl RecognitionWorker {
                     };
                     match recognizer.recognize(&frame) {
                         Ok(detections) => {
-                            let _ = worker_event_tx
-                                .send(WorkerEvent::DetectionsUpdated(detections));
+                            let _ =
+                                worker_event_tx.send(WorkerEvent::DetectionsUpdated(detections));
                         }
                         Err(error) => {
                             let _ = worker_event_tx
@@ -986,22 +986,15 @@ mod tests {
         let (worker_event_tx, _worker_event_rx) = mpsc::unbounded_channel();
         let mut worker = RecognitionWorker::spawn(recognizer.clone(), worker_event_tx).unwrap();
         let sink = worker.sink();
-        let frame = |id| {
-            Frame::new(id, Instant::now(), 1, 1, PixelFormat::Rgb8, vec![0; 3]).unwrap()
-        };
+        let frame =
+            |id| Frame::new(id, Instant::now(), 1, 1, PixelFormat::Rgb8, vec![0; 3]).unwrap();
 
         sink.submit(frame(1));
-        assert_eq!(
-            started_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
-            1
-        );
+        assert_eq!(started_rx.recv_timeout(Duration::from_secs(1)).unwrap(), 1);
         sink.submit(frame(2));
         sink.submit(frame(3));
         release_tx.send(()).unwrap();
-        assert_eq!(
-            started_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
-            3
-        );
+        assert_eq!(started_rx.recv_timeout(Duration::from_secs(1)).unwrap(), 3);
         worker.stop();
 
         assert_eq!(*recognizer.frame_ids.lock().unwrap(), [1, 3]);

@@ -121,7 +121,8 @@ impl BetterE7App {
                     self.recognition_updates = self.recognition_updates.saturating_add(1);
                     let elapsed = self.recognition_window_started.elapsed();
                     if elapsed >= Duration::from_secs(1) {
-                        self.recognition_fps = self.recognition_updates as f32 / elapsed.as_secs_f32();
+                        self.recognition_fps =
+                            self.recognition_updates as f32 / elapsed.as_secs_f32();
                         self.recognition_updates = 0;
                         self.recognition_window_started = Instant::now();
                     }
