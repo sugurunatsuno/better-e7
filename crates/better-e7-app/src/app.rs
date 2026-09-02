@@ -14,6 +14,8 @@ use better_e7_runtime::{
 use eframe::egui;
 use tracing::{error, info};
 
+use crate::profile_editor::{ProfileEditor, ProfileEditorCommand};
+
 const MAX_VISIBLE_LOGS: usize = 500;
 
 pub struct BetterE7App {
@@ -33,6 +35,7 @@ pub struct BetterE7App {
     automation_profile_name: Option<String>,
     automation_profile_path: String,
     last_profile_validation: Option<String>,
+    profile_editor: ProfileEditor,
     automation_dry_run: bool,
     offline_frames_directory: String,
     offline_automation_running: bool,
@@ -43,6 +46,11 @@ pub struct BetterE7App {
 
 impl BetterE7App {
     pub fn new(_creation_context: &eframe::CreationContext<'_>, config: AppConfig) -> Self {
+        let automation_profile_path = config
+            .automation_profile_path
+            .as_ref()
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_default();
         let mut app = Self {
             config: config.clone(),
             runtime: None,
@@ -58,12 +66,9 @@ impl BetterE7App {
             recognition_updates: 0,
             recognition_window_started: Instant::now(),
             automation_profile_name: None,
-            automation_profile_path: config
-                .automation_profile_path
-                .as_ref()
-                .map(|path| path.to_string_lossy().into_owned())
-                .unwrap_or_default(),
+            automation_profile_path: automation_profile_path.clone(),
             last_profile_validation: None,
+            profile_editor: ProfileEditor::new(automation_profile_path),
             automation_dry_run: config.automation_dry_run,
             offline_frames_directory: String::new(),
             offline_automation_running: false,
@@ -157,6 +162,7 @@ impl BetterE7App {
                 RuntimeEvent::AutomationProfileChanged { name, path } => {
                     self.automation_profile_name = Some(name.clone());
                     self.automation_profile_path = path.to_string_lossy().into_owned();
+                    self.profile_editor.set_path(&self.automation_profile_path);
                     self.config.automation_profile_path = Some(path);
                     self.save_config();
                     self.push_log(format!("自動化profileを変更しました: {name}"));
@@ -172,6 +178,23 @@ impl BetterE7App {
                     self.push_log(format!(
                         "profileを検証しました: {} / {summary}",
                         path.display()
+                    ));
+                }
+                RuntimeEvent::AutomationProfileEditorLoaded { path, profile } => {
+                    let name = profile.name.clone();
+                    self.profile_editor.loaded(path, profile);
+                    self.push_log(format!("rule editorへ{name}を読み込みました"));
+                }
+                RuntimeEvent::AutomationProfileSaved {
+                    name,
+                    path,
+                    templates,
+                    rules,
+                } => {
+                    self.profile_editor.saved(path.clone(), &name);
+                    self.automation_profile_path = path.to_string_lossy().into_owned();
+                    self.push_log(format!(
+                        "profileを保存しました: {name} / {templates} templates / {rules} rules"
                     ));
                 }
                 RuntimeEvent::AutomationDryRunChanged(enabled) => {
@@ -316,6 +339,7 @@ impl BetterE7App {
         let mut validation_path = None;
         let mut dry_run = None;
         let mut offline_command = None;
+        let mut open_editor = false;
         egui::SidePanel::left("devices")
             .resizable(true)
             .default_width(260.0)
@@ -431,6 +455,12 @@ impl BetterE7App {
                     "検証結果: {}",
                     self.last_profile_validation.as_deref().unwrap_or("未実行")
                 ));
+                if ui
+                    .add_enabled(can_configure, egui::Button::new("rule editorを開く"))
+                    .clicked()
+                {
+                    open_editor = true;
+                }
                 let mut enabled = self.automation_dry_run;
                 if ui
                     .add_enabled(can_configure, egui::Checkbox::new(&mut enabled, "dry-run"))
@@ -501,6 +531,10 @@ impl BetterE7App {
         }
         if let Some(command) = offline_command {
             self.send(command);
+        }
+        if open_editor {
+            self.profile_editor.set_path(&self.automation_profile_path);
+            self.profile_editor.open();
         }
     }
 
@@ -677,6 +711,19 @@ impl eframe::App for BetterE7App {
         self.show_devices(context);
         self.show_preview(context);
         self.show_logs(context);
+        let editor_enabled = self.runtime.is_some()
+            && self.connection_state == ConnectionState::Disconnected
+            && !self.offline_automation_running;
+        if let Some(command) = self.profile_editor.show(context, editor_enabled) {
+            match command {
+                ProfileEditorCommand::Load(path) => {
+                    self.send(RuntimeCommand::LoadAutomationProfileEditor(path));
+                }
+                ProfileEditorCommand::Save { path, profile } => {
+                    self.send(RuntimeCommand::SaveAutomationProfile { path, profile });
+                }
+            }
+        }
         context.request_repaint_after(Duration::from_millis(100));
     }
 }

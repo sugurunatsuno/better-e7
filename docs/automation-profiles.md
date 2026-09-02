@@ -94,6 +94,8 @@ GUIでは停止中にprofile pathを変更できます。dry-runを有効にす�
 
 profileを検証を押すと、TOMLの構造、Ruleの参照、template assetの読み込みをAndroidへ接続せずに確認します。成功時はprofile名とtemplate / Ruleの件数を表示し、失敗時は対象pathを含むエラーをログへ表示します。
 
+rule editorではTemplateのID / 画像path / threshold / ROIと、RuleのCondition / Action / priority / cooldown / consumeを編集できます。Conditionはall / any / notを入れ子にできます。検証して保存を押すと、参照とassetの読み込みに成功した場合だけTOMLを保存します。保存後に実行内容を変更する場合は、profileを読み込むを押します。
+
 profileにtemplateがなくてもRule engineは動きます。この構成は`always`や固定座標のActionをmock Frameで検証するときに使えます。rule editorは今後の実装範囲です。
 
 `automation_history_path`を設定すると、Ruleの発火と入力の処理結果をJSONLへ追記します。dry-runでは`input_planned`、通常実行では`input_queued`として区別します。

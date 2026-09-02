@@ -45,7 +45,7 @@
 - [x] dry-runを作る
 - [x] 保存Frame列を使うオフライン実行を作る
 - [x] profileとassetを実機なしで検証できるようにする
-- [ ] rule editorを作る
+- [x] rule editorを作る
 - [x] 実行履歴をJSONLへ保存できるようにする
 
 ## ゲーム別拡張

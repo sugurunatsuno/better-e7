@@ -41,6 +41,11 @@ pub enum RuntimeCommand {
     SelectDevice(String),
     LoadAutomationProfile(PathBuf),
     ValidateAutomationProfile(PathBuf),
+    LoadAutomationProfileEditor(PathBuf),
+    SaveAutomationProfile {
+        path: PathBuf,
+        profile: AutomationProfile,
+    },
     SetAutomationDryRun(bool),
     StartAutomation,
     StopAutomation,
@@ -83,6 +88,16 @@ pub enum RuntimeEvent {
         path: PathBuf,
     },
     AutomationProfileValidated {
+        name: String,
+        path: PathBuf,
+        templates: usize,
+        rules: usize,
+    },
+    AutomationProfileEditorLoaded {
+        path: PathBuf,
+        profile: AutomationProfile,
+    },
+    AutomationProfileSaved {
         name: String,
         path: PathBuf,
         templates: usize,
@@ -328,6 +343,26 @@ pub fn validate_automation_profile(
     build_profile_recognizers(profile_path, &profile)?;
     Ok(AutomationProfileValidation {
         name: profile.name,
+        path: profile_path.to_owned(),
+        templates: profile.templates.len(),
+        rules: profile.rules.len(),
+    })
+}
+
+pub fn save_automation_profile(
+    profile_path: impl AsRef<Path>,
+    profile: &AutomationProfile,
+) -> Result<AutomationProfileValidation, RuntimeError> {
+    let profile_path = profile_path.as_ref();
+    profile
+        .validate_template_references()
+        .map_err(|error| RuntimeError::AutomationProfile(error.to_string()))?;
+    build_profile_recognizers(profile_path, profile)?;
+    profile
+        .save(profile_path)
+        .map_err(|error| RuntimeError::AutomationProfile(error.to_string()))?;
+    Ok(AutomationProfileValidation {
+        name: profile.name.clone(),
         path: profile_path.to_owned(),
         templates: profile.templates.len(),
         rules: profile.rules.len(),
@@ -924,6 +959,77 @@ async fn run_coordinator(
                                 &event_tx,
                                 RuntimeEvent::Error(format!(
                                     "profile validation worker failed: {error}"
+                                )),
+                            ),
+                        }
+                    }
+                    RuntimeCommand::LoadAutomationProfileEditor(path) => {
+                        if connection_state != ConnectionState::Disconnected
+                            || offline_worker_stop.is_some()
+                        {
+                            send_event(
+                                &event_tx,
+                                RuntimeEvent::Error(
+                                    "stop automation before editing a profile".to_owned(),
+                                ),
+                            );
+                            continue;
+                        }
+                        let result = tokio::task::spawn_blocking(move || {
+                            let profile = AutomationProfile::load(&path)
+                                .map_err(|error| RuntimeError::AutomationProfile(error.to_string()));
+                            (path, profile)
+                        })
+                        .await;
+                        match result {
+                            Ok((path, Ok(profile))) => send_event(
+                                &event_tx,
+                                RuntimeEvent::AutomationProfileEditorLoaded { path, profile },
+                            ),
+                            Ok((_, Err(error))) => {
+                                send_event(&event_tx, RuntimeEvent::Error(error.to_string()));
+                            }
+                            Err(error) => send_event(
+                                &event_tx,
+                                RuntimeEvent::Error(format!(
+                                    "profile editor loader failed: {error}"
+                                )),
+                            ),
+                        }
+                    }
+                    RuntimeCommand::SaveAutomationProfile { path, profile } => {
+                        if connection_state != ConnectionState::Disconnected
+                            || offline_worker_stop.is_some()
+                        {
+                            send_event(
+                                &event_tx,
+                                RuntimeEvent::Error(
+                                    "stop automation before saving a profile".to_owned(),
+                                ),
+                            );
+                            continue;
+                        }
+                        let result = tokio::task::spawn_blocking(move || {
+                            save_automation_profile(path, &profile)
+                        })
+                        .await;
+                        match result {
+                            Ok(Ok(validation)) => send_event(
+                                &event_tx,
+                                RuntimeEvent::AutomationProfileSaved {
+                                    name: validation.name,
+                                    path: validation.path,
+                                    templates: validation.templates,
+                                    rules: validation.rules,
+                                },
+                            ),
+                            Ok(Err(error)) => {
+                                send_event(&event_tx, RuntimeEvent::Error(error.to_string()));
+                            }
+                            Err(error) => send_event(
+                                &event_tx,
+                                RuntimeEvent::Error(format!(
+                                    "profile editor save worker failed: {error}"
                                 )),
                             ),
                         }
@@ -2129,6 +2235,35 @@ mod tests {
 
         assert!(error.to_string().contains("missing.png"));
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn profile_save_does_not_overwrite_with_invalid_references() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("better-e7-save-{suffix}.toml"));
+        fs::write(&path, "original").unwrap();
+        let invalid = AutomationProfile {
+            name: "invalid".to_owned(),
+            templates: Vec::new(),
+            rules: vec![better_e7_automation::AutomationRule {
+                id: "tap".to_owned(),
+                enabled: true,
+                priority: 0,
+                cooldown_ms: 0,
+                consume: true,
+                condition: better_e7_automation::Condition::Always,
+                action: better_e7_automation::Action::TapDetection {
+                    label: "missing".to_owned(),
+                },
+            }],
+        };
+
+        assert!(save_automation_profile(&path, &invalid).is_err());
+        assert_eq!(fs::read_to_string(&path).unwrap(), "original");
+        fs::remove_file(path).unwrap();
     }
 
     #[test]

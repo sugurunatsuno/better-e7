@@ -28,6 +28,7 @@ Android端末が必要な確認と、通常の自動テストを分けます。
 - AutomationProfileのTOML parse / serialize / validationを検証する
 - Condition / Actionが未定義templateを参照した場合に拒否する
 - profile検証でtemplate assetの欠落を検出する
+- rule editorの保存前に参照とassetを検証し、失敗時は既存profileを上書きしない
 - 汎用Ruleをpriority順に評価する
 - 経過時間を直接渡してcooldownを検証する
 - consumeするlog Ruleが低priorityのRuleを止めることを検証する

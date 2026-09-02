@@ -102,6 +102,8 @@ profile内の複数templateは`RecognizerSet`へまとめます。認識worker�
 
 profileは停止中に読み直せます。新しいprofileのparse / validation / template読み込みがすべて成功してからrecognizerとengineを交換します。失敗時は実行中の設定を維持します。dry-runではengineまで同じ経路を通し、入力queueの直前で予定入力eventへ変換します。
 
+rule editorはAutomationProfileの型を直接編集し、Template / ROI / Condition / Action / priority / cooldown / consumeをeguiへ表示します。保存処理はruntime workerで参照とassetを先に検証し、成功した場合だけTOMLを書き込みます。保存したprofileは自動では実行設定へ反映せず、利用者が明示的に読み込んだ時点で差し替えます。
+
 録画の回帰確認には動画decoderを毎回動かさず、録画から抽出した画像pathを`ImageSequenceSource`へ渡します。Frame IDと順序を固定できるため、同じmatcher結果を通常CIで再現できます。
 
 オフライン実行では指定directory内のPNG / JPEGを名前順に読み、通常実行と同じprofile読み込み / `RecognizerSet` / `AutomationEngine`へ渡します。入力はAndroidへ送らず、すべて予定入力としてGUIと実行履歴へ返します。処理は専用workerで動かし、GUIから停止できます。
