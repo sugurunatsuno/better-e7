@@ -396,7 +396,7 @@ mod tests {
         assert!(parser.push(&[0, 0]).is_empty());
         assert!(parser.push(&[0, 1, 0x67, 1, 2, 0]).is_empty());
 
-        let units = parser.push(&[0, 0, 0, 1, 0x68, 3]);
+        let units = parser.push(&[0, 0, 1, 0x68, 3]);
         assert_eq!(units.len(), 1);
         assert_eq!(units[0].nal_unit_type, 7);
         assert_eq!(units[0].data, [0, 0, 0, 1, 0x67, 1, 2]);
