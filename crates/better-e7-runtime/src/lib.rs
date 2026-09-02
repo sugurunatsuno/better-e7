@@ -1,6 +1,8 @@
 use std::{
     error::Error,
     fmt,
+    fs::OpenOptions,
+    io::{BufWriter, Write},
     path::{Path, PathBuf},
     sync::{
         Arc, Condvar, Mutex,
@@ -8,7 +10,7 @@ use std::{
         mpsc as std_mpsc,
     },
     thread::{self, JoinHandle},
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use better_e7_adb::{AdbClient, AdbDevice, AdbInputController, DeviceLister};
@@ -20,6 +22,7 @@ use better_e7_core::{
 };
 use better_e7_video::{FfmpegProcessDecoderFactory, VideoDecoder, VideoDecoderFactory};
 use better_e7_vision::{RecognizerSet, TemplateMatcher};
+use serde::Serialize;
 use tokio::{
     runtime::{Builder, Runtime},
     sync::mpsc,
@@ -28,6 +31,7 @@ use tokio::{
 
 const VIDEO_BUFFER_SIZE: usize = 64 * 1_024;
 const INPUT_QUEUE_SIZE: usize = 64;
+const HISTORY_QUEUE_SIZE: usize = 256;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum RuntimeCommand {
@@ -134,7 +138,9 @@ impl AppRuntime {
             adb_path: config.adb_path.clone(),
             recognizer: automation.recognizer,
             automation_engine: automation.engine,
+            automation_profile_name: automation.profile_name,
             automation_dry_run: config.automation_dry_run,
+            automation_history_path: config.automation_history_path.clone(),
         };
         let _coordinator = runtime.spawn(run_coordinator(
             resources,
@@ -180,7 +186,9 @@ struct CoordinatorResources {
     adb_path: PathBuf,
     recognizer: Option<Arc<dyn Recognizer>>,
     automation_engine: Option<AutomationEngine>,
+    automation_profile_name: Option<String>,
     automation_dry_run: bool,
+    automation_history_path: Option<PathBuf>,
 }
 
 struct BuiltAutomation {
@@ -273,11 +281,25 @@ async fn run_coordinator(
         adb_path,
         mut recognizer,
         mut automation_engine,
+        mut automation_profile_name,
         mut automation_dry_run,
+        automation_history_path,
     } = resources;
     let mut interval = tokio::time::interval(refresh_interval);
     interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
     let (worker_event_tx, mut worker_event_rx) = mpsc::unbounded_channel();
+    let mut history_writer = automation_history_path.and_then(|path| {
+        match AutomationHistoryWriter::spawn(path, worker_event_tx.clone()) {
+            Ok(writer) => Some(writer),
+            Err(error) => {
+                send_event(
+                    &event_tx,
+                    RuntimeEvent::Error(format!("failed to start history writer: {error}")),
+                );
+                None
+            }
+        }
+    });
     let mut devices = Vec::new();
     let mut selected_device: Option<String> = None;
     let mut automation_state = AutomationState::Stopped;
@@ -348,6 +370,17 @@ async fn run_coordinator(
                                 match engine.tick(&detections, started_at.elapsed()) {
                                     Ok(report) => {
                                         for rule_id in report.fired_rules {
+                                            submit_history(
+                                                history_writer.as_ref(),
+                                                AutomationHistoryRecord::new(
+                                                    automation_profile_name.as_deref(),
+                                                    Some(started_at.elapsed()),
+                                                    &rule_id,
+                                                    AutomationHistoryEvent::RuleFired,
+                                                    None,
+                                                ),
+                                                &event_tx,
+                                            );
                                             send_event(
                                                 &event_tx,
                                                 RuntimeEvent::AutomationRuleFired(rule_id),
@@ -366,7 +399,22 @@ async fn run_coordinator(
                                                 &latest_frame,
                                                 input_queue.as_ref(),
                                             ) {
-                                                Ok(AutomationInputDispatch::Queued(command)) => {
+                                                Ok(AutomationInputDispatch::Queued {
+                                                    rule_id,
+                                                    command,
+                                                }) => {
+                                                    let detail = describe_pixel_input(command);
+                                                    submit_history(
+                                                        history_writer.as_ref(),
+                                                        AutomationHistoryRecord::new(
+                                                            automation_profile_name.as_deref(),
+                                                            Some(started_at.elapsed()),
+                                                            &rule_id,
+                                                            AutomationHistoryEvent::InputQueued,
+                                                            Some(detail),
+                                                        ),
+                                                        &event_tx,
+                                                    );
                                                     send_event(
                                                         &event_tx,
                                                         RuntimeEvent::InputQueued(command),
@@ -375,13 +423,27 @@ async fn run_coordinator(
                                                 Ok(AutomationInputDispatch::Planned {
                                                     rule_id,
                                                     command,
-                                                }) => send_event(
-                                                    &event_tx,
-                                                    RuntimeEvent::AutomationInputPlanned {
-                                                        rule_id,
-                                                        command,
-                                                    },
-                                                ),
+                                                }) => {
+                                                    let detail = describe_normalized_input(&command);
+                                                    submit_history(
+                                                        history_writer.as_ref(),
+                                                        AutomationHistoryRecord::new(
+                                                            automation_profile_name.as_deref(),
+                                                            Some(started_at.elapsed()),
+                                                            &rule_id,
+                                                            AutomationHistoryEvent::InputPlanned,
+                                                            Some(detail),
+                                                        ),
+                                                        &event_tx,
+                                                    );
+                                                    send_event(
+                                                        &event_tx,
+                                                        RuntimeEvent::AutomationInputPlanned {
+                                                            rule_id,
+                                                            command,
+                                                        },
+                                                    );
+                                                }
                                                 Err(message) => send_event(
                                                     &event_tx,
                                                     RuntimeEvent::Error(message),
@@ -400,6 +462,12 @@ async fn run_coordinator(
                             send_event(&event_tx, RuntimeEvent::DetectionsUpdated(detections));
                         }
                         WorkerEvent::RecognitionFailed(message) => {
+                            send_event(&event_tx, RuntimeEvent::Error(message));
+                        }
+                        WorkerEvent::HistoryFailed(message) => {
+                            if let Some(mut writer) = history_writer.take() {
+                                writer.stop();
+                            }
                             send_event(&event_tx, RuntimeEvent::Error(message));
                         }
                     }
@@ -463,6 +531,7 @@ async fn run_coordinator(
                                 let profile_name = automation
                                     .profile_name
                                     .expect("loaded profiles always have a name");
+                                automation_profile_name = Some(profile_name.clone());
                                 send_event(
                                     &event_tx,
                                     RuntimeEvent::AutomationProfileChanged {
@@ -903,9 +972,174 @@ impl Drop for RecognitionWorker {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum AutomationHistoryEvent {
+    RuleFired,
+    InputQueued,
+    InputPlanned,
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize)]
+struct AutomationHistoryRecord {
+    version: u8,
+    timestamp_unix_ms: u64,
+    session_elapsed_ms: Option<u64>,
+    profile: Option<String>,
+    rule_id: String,
+    event: AutomationHistoryEvent,
+    detail: Option<String>,
+}
+
+impl AutomationHistoryRecord {
+    fn new(
+        profile: Option<&str>,
+        session_elapsed: Option<Duration>,
+        rule_id: &str,
+        event: AutomationHistoryEvent,
+        detail: Option<String>,
+    ) -> Self {
+        Self {
+            version: 1,
+            timestamp_unix_ms: milliseconds_since_epoch(),
+            session_elapsed_ms: session_elapsed.map(duration_milliseconds),
+            profile: profile.map(str::to_owned),
+            rule_id: rule_id.to_owned(),
+            event,
+            detail,
+        }
+    }
+}
+
+fn milliseconds_since_epoch() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(duration_milliseconds)
+        .unwrap_or(0)
+}
+
+fn duration_milliseconds(duration: Duration) -> u64 {
+    duration.as_millis().try_into().unwrap_or(u64::MAX)
+}
+
+struct AutomationHistoryWriter {
+    record_tx: Option<std_mpsc::SyncSender<AutomationHistoryRecord>>,
+    worker: Option<JoinHandle<()>>,
+}
+
+impl AutomationHistoryWriter {
+    fn spawn(
+        path: PathBuf,
+        worker_event_tx: mpsc::UnboundedSender<WorkerEvent>,
+    ) -> Result<Self, std::io::Error> {
+        let file = OpenOptions::new().create(true).append(true).open(path)?;
+        let (record_tx, record_rx) = std_mpsc::sync_channel(HISTORY_QUEUE_SIZE);
+        let worker = thread::Builder::new()
+            .name("better-e7-history".to_owned())
+            .spawn(move || {
+                let mut writer = BufWriter::new(file);
+                while let Ok(record) = record_rx.recv() {
+                    if let Err(error) = write_history_record(&mut writer, &record) {
+                        let _ = worker_event_tx.send(WorkerEvent::HistoryFailed(format!(
+                            "history writer failed: {error}"
+                        )));
+                        break;
+                    }
+                }
+            })?;
+        Ok(Self {
+            record_tx: Some(record_tx),
+            worker: Some(worker),
+        })
+    }
+
+    fn submit(&self, record: AutomationHistoryRecord) -> Result<(), String> {
+        let sender = self
+            .record_tx
+            .as_ref()
+            .ok_or_else(|| "history writer has stopped".to_owned())?;
+        sender.try_send(record).map_err(|error| match error {
+            std_mpsc::TrySendError::Full(_) => "history queue is full".to_owned(),
+            std_mpsc::TrySendError::Disconnected(_) => "history writer has stopped".to_owned(),
+        })
+    }
+
+    fn stop(&mut self) {
+        self.record_tx.take();
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+}
+
+impl Drop for AutomationHistoryWriter {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+fn write_history_record(
+    writer: &mut impl Write,
+    record: &AutomationHistoryRecord,
+) -> Result<(), std::io::Error> {
+    serde_json::to_writer(&mut *writer, record).map_err(std::io::Error::other)?;
+    writer.write_all(b"\n")?;
+    writer.flush()
+}
+
+fn submit_history(
+    writer: Option<&AutomationHistoryWriter>,
+    record: AutomationHistoryRecord,
+    event_tx: &mpsc::UnboundedSender<RuntimeEvent>,
+) {
+    if let Some(writer) = writer
+        && let Err(message) = writer.submit(record)
+    {
+        send_event(
+            event_tx,
+            RuntimeEvent::Error(format!("failed to save automation history: {message}")),
+        );
+    }
+}
+
+fn describe_normalized_input(command: &InputCommand) -> String {
+    match command {
+        InputCommand::Tap { point } => format!("tap {:.3} {:.3}", point.x(), point.y()),
+        InputCommand::Swipe { from, to, duration } => format!(
+            "swipe {:.3} {:.3} {:.3} {:.3} {}ms",
+            from.x(),
+            from.y(),
+            to.x(),
+            to.y(),
+            duration.as_millis()
+        ),
+        InputCommand::Key { android_key_code } => format!("keyevent {android_key_code}"),
+    }
+}
+
+fn describe_pixel_input(command: PixelInputCommand) -> String {
+    match command {
+        PixelInputCommand::Tap { x, y } => format!("tap {x} {y}"),
+        PixelInputCommand::Swipe {
+            from_x,
+            from_y,
+            to_x,
+            to_y,
+            duration,
+        } => format!(
+            "swipe {from_x} {from_y} {to_x} {to_y} {}ms",
+            duration.as_millis()
+        ),
+        PixelInputCommand::Key { android_key_code } => format!("keyevent {android_key_code}"),
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 enum AutomationInputDispatch {
-    Queued(PixelInputCommand),
+    Queued {
+        rule_id: String,
+        command: PixelInputCommand,
+    },
     Planned {
         rule_id: String,
         command: InputCommand,
@@ -926,7 +1160,10 @@ fn dispatch_automation_input(
     }
     let rule_id = input.rule_id;
     queue_input(input.command, latest_frame, input_queue)
-        .map(AutomationInputDispatch::Queued)
+        .map(|command| AutomationInputDispatch::Queued {
+            rule_id: rule_id.clone(),
+            command,
+        })
         .map_err(|message| format!("automation rule {rule_id} failed to queue input: {message}"))
 }
 
@@ -1062,6 +1299,7 @@ enum WorkerEvent {
     InputFailed(String),
     DetectionsUpdated(Vec<Detection>),
     RecognitionFailed(String),
+    HistoryFailed(String),
 }
 
 #[derive(Debug)]
@@ -1105,7 +1343,7 @@ mod tests {
         collections::VecDeque,
         fs,
         sync::mpsc::{Receiver, Sender},
-        time::Instant,
+        time::{Instant, SystemTime},
     };
 
     use better_e7_core::{InputError, PixelFormat};
@@ -1306,9 +1544,12 @@ mod tests {
         assert!(detections.is_empty());
         assert_eq!(
             queued,
-            AutomationInputDispatch::Queued(PixelInputCommand::Key {
-                android_key_code: 3
-            })
+            AutomationInputDispatch::Queued {
+                rule_id: "go-home".to_owned(),
+                command: PixelInputCommand::Key {
+                    android_key_code: 3
+                }
+            }
         );
         release_tx.send(()).unwrap();
         queue.stop();
@@ -1336,5 +1577,54 @@ mod tests {
                 }
             }
         );
+    }
+
+    #[test]
+    fn writes_automation_history_as_ordered_json_lines() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "better-e7-automation-history-{suffix}.jsonl"
+        ));
+        let (worker_event_tx, mut worker_event_rx) = mpsc::unbounded_channel();
+        let mut writer = AutomationHistoryWriter::spawn(path.clone(), worker_event_tx).unwrap();
+        writer
+            .submit(AutomationHistoryRecord::new(
+                Some("mock-profile"),
+                Some(Duration::from_millis(10)),
+                "go-home",
+                AutomationHistoryEvent::RuleFired,
+                None,
+            ))
+            .unwrap();
+        writer
+            .submit(AutomationHistoryRecord::new(
+                Some("mock-profile"),
+                Some(Duration::from_millis(11)),
+                "go-home",
+                AutomationHistoryEvent::InputQueued,
+                Some("keyevent 3".to_owned()),
+            ))
+            .unwrap();
+        writer.stop();
+
+        let contents = fs::read_to_string(&path).unwrap();
+        let records = contents
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+            .collect::<Vec<_>>();
+
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0]["version"], 1);
+        assert_eq!(records[0]["profile"], "mock-profile");
+        assert_eq!(records[0]["rule_id"], "go-home");
+        assert_eq!(records[0]["event"], "rule_fired");
+        assert_eq!(records[0]["session_elapsed_ms"], 10);
+        assert_eq!(records[1]["event"], "input_queued");
+        assert_eq!(records[1]["detail"], "keyevent 3");
+        assert!(worker_event_rx.try_recv().is_err());
+        fs::remove_file(path).unwrap();
     }
 }

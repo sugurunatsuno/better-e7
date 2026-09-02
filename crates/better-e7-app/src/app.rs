@@ -386,6 +386,15 @@ impl BetterE7App {
                     dry_run = Some(enabled);
                 }
                 ui.label("dry-runではAndroidへ入力を送りません");
+                ui.label(format!(
+                    "history: {}",
+                    self.config
+                        .automation_history_path
+                        .as_ref()
+                        .map(|path| path.to_string_lossy())
+                        .as_deref()
+                        .unwrap_or("無効")
+                ));
             });
         if let Some(command) = input_command {
             self.send(RuntimeCommand::SubmitInput(command));

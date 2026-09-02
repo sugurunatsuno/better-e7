@@ -11,6 +11,7 @@ scrcpy_local_port = 27183
 scrcpy_max_size = 1920
 # automation_profile_path = "automation.toml"
 automation_dry_run = false
+# automation_history_path = "automation-history.jsonl"
 recognition_threshold = 0.9
 # recognition_template_path = "assets/confirm.png"
 ```
@@ -65,6 +66,12 @@ Androidから送る映像の最大辺です。初期値は1920です。0を指�
 ## automation_dry_run
 
 `true`にするとRuleの認識 / priority / cooldown / logを通常どおり実行しますが、Ruleが生成した入力はAndroidへ送りません。予定していたRuleと入力はGUIの状態欄とログへ表示します。previewのclickやHome / Backなどの手動入力には影響しません。
+
+## automation_history_path
+
+自動化の実行履歴を追記するJSONLファイルのpathです。未指定の場合は履歴workerを起動せず、ファイルも作りません。変更は次回起動時から反映されます。
+
+履歴にはRuleの発火 / 入力queueへの登録 / dry-runの予定入力を順番に記録します。保存に失敗した場合はGUIへエラーを出して履歴workerだけを停止し、自動化と映像接続は継続します。
 
 ## recognition_threshold
 

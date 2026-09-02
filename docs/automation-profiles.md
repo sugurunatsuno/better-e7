@@ -92,4 +92,6 @@ label = "confirm"
 
 GUIでは停止中にprofile pathを変更できます。dry-runを有効にすると入力をqueueへ送らず、予定入力だけを表示します。
 
-profileにtemplateがなくてもRule engineは動きます。この構成は`always`や固定座標のActionをmock Frameで検証するときに使えます。editor / 実行履歴の保存は今後の実装範囲です。
+profileにtemplateがなくてもRule engineは動きます。この構成は`always`や固定座標のActionをmock Frameで検証するときに使えます。rule editorは今後の実装範囲です。
+
+`automation_history_path`を設定すると、Ruleの発火と入力の処理結果をJSONLへ追記します。dry-runでは`input_planned`、通常実行では`input_queued`として区別します。

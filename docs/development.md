@@ -31,6 +31,8 @@ profileは停止中にGUIのタスク欄から読み直せます。最初はdry-
 
 録画を使う認識回帰では、確認したい場面をPNGまたはJPEGの連番へ抽出し、`ImageSequenceSource`へ順番に渡します。通常CIでは動画codecやAndroid端末を必要としません。
 
+実行履歴が必要な場合は`automation_history_path`を設定してアプリを再起動します。JSONLは追記形式なので、1行ずつ処理してRuleの順序やdry-runとの差を確認できます。
+
 ## 実装の進め方
 
 縦切りで動く範囲を増やします。最初の縦切りは次の流れです。
