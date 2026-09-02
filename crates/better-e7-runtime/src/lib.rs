@@ -442,7 +442,10 @@ async fn refresh_devices(
                 }
             }
             *state.devices = updated_devices;
-            send_event(event_tx, RuntimeEvent::DevicesUpdated(state.devices.clone()));
+            send_event(
+                event_tx,
+                RuntimeEvent::DevicesUpdated(state.devices.clone()),
+            );
         }
         Ok(Err(error)) => send_event(event_tx, RuntimeEvent::Error(error.to_string())),
         Err(error) => send_event(
