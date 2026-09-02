@@ -1,8 +1,9 @@
 use std::{
+    collections::VecDeque,
     error::Error,
     fmt,
     fs::{self, OpenOptions},
-    io::{BufWriter, Write},
+    io::{BufRead, BufReader, BufWriter, Write},
     path::{Path, PathBuf},
     sync::{
         Arc, Condvar, Mutex,
@@ -23,7 +24,7 @@ use better_e7_core::{
 };
 use better_e7_video::{FfmpegProcessDecoderFactory, VideoDecoder, VideoDecoderFactory};
 use better_e7_vision::{ImageSequenceSource, RecognizerSet, TemplateMatcher};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::{
     runtime::{Builder, Runtime},
     sync::mpsc,
@@ -34,6 +35,7 @@ const VIDEO_BUFFER_SIZE: usize = 64 * 1_024;
 const INPUT_QUEUE_SIZE: usize = 64;
 const HISTORY_QUEUE_SIZE: usize = 256;
 const OFFLINE_FRAME_INTERVAL: Duration = Duration::from_millis(100);
+const HISTORY_VIEW_LIMIT: usize = 10_000;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum RuntimeCommand {
@@ -46,6 +48,7 @@ pub enum RuntimeCommand {
         path: PathBuf,
         profile: AutomationProfile,
     },
+    LoadAutomationHistory(PathBuf),
     SetAutomationDryRun(bool),
     StartAutomation,
     StopAutomation,
@@ -102,6 +105,10 @@ pub enum RuntimeEvent {
         path: PathBuf,
         templates: usize,
         rules: usize,
+    },
+    AutomationHistoryLoaded {
+        path: PathBuf,
+        records: Vec<AutomationHistoryRecord>,
     },
     AutomationDryRunChanged(bool),
     AutomationRuleFired(String),
@@ -1034,6 +1041,28 @@ async fn run_coordinator(
                             ),
                         }
                     }
+                    RuntimeCommand::LoadAutomationHistory(path) => {
+                        let result = tokio::task::spawn_blocking(move || {
+                            let records = load_automation_history(&path);
+                            (path, records)
+                        })
+                        .await;
+                        match result {
+                            Ok((path, Ok(records))) => send_event(
+                                &event_tx,
+                                RuntimeEvent::AutomationHistoryLoaded { path, records },
+                            ),
+                            Ok((_, Err(error))) => {
+                                send_event(&event_tx, RuntimeEvent::Error(error.to_string()));
+                            }
+                            Err(error) => send_event(
+                                &event_tx,
+                                RuntimeEvent::Error(format!(
+                                    "history loader worker failed: {error}"
+                                )),
+                            ),
+                        }
+                    }
                     RuntimeCommand::SetAutomationDryRun(enabled) => {
                         if connection_state != ConnectionState::Disconnected
                             || offline_worker_stop.is_some()
@@ -1509,23 +1538,34 @@ impl Drop for RecognitionWorker {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
-enum AutomationHistoryEvent {
+pub enum AutomationHistoryEvent {
     RuleFired,
     InputQueued,
     InputPlanned,
 }
 
-#[derive(Debug, PartialEq, Eq, Serialize)]
-struct AutomationHistoryRecord {
-    version: u8,
-    timestamp_unix_ms: u64,
-    session_elapsed_ms: Option<u64>,
-    profile: Option<String>,
-    rule_id: String,
-    event: AutomationHistoryEvent,
-    detail: Option<String>,
+impl AutomationHistoryEvent {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::RuleFired => "rule_fired",
+            Self::InputQueued => "input_queued",
+            Self::InputPlanned => "input_planned",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct AutomationHistoryRecord {
+    pub version: u8,
+    pub timestamp_unix_ms: u64,
+    pub session_elapsed_ms: Option<u64>,
+    pub profile: Option<String>,
+    pub rule_id: String,
+    pub event: AutomationHistoryEvent,
+    pub detail: Option<String>,
 }
 
 impl AutomationHistoryRecord {
@@ -1607,6 +1647,40 @@ impl AutomationHistoryWriter {
             let _ = worker.join();
         }
     }
+}
+
+pub fn load_automation_history(
+    path: impl AsRef<Path>,
+) -> Result<Vec<AutomationHistoryRecord>, RuntimeError> {
+    let path = path.as_ref();
+    let file = fs::File::open(path).map_err(|error| {
+        RuntimeError::History(format!("failed to open {}: {error}", path.display()))
+    })?;
+    let mut records = VecDeque::with_capacity(HISTORY_VIEW_LIMIT);
+    for (index, line) in BufReader::new(file).lines().enumerate() {
+        let line = line.map_err(|error| {
+            RuntimeError::History(format!(
+                "failed to read {} at line {}: {error}",
+                path.display(),
+                index + 1
+            ))
+        })?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let record = serde_json::from_str(&line).map_err(|error| {
+            RuntimeError::History(format!(
+                "failed to parse {} at line {}: {error}",
+                path.display(),
+                index + 1
+            ))
+        })?;
+        if records.len() == HISTORY_VIEW_LIMIT {
+            records.pop_front();
+        }
+        records.push_back(record);
+    }
+    Ok(records.into_iter().collect())
 }
 
 impl Drop for AutomationHistoryWriter {
@@ -1846,6 +1920,7 @@ pub enum RuntimeError {
     AutomationProfile(String),
     Recognition(String),
     Offline(String),
+    History(String),
     Stopped,
 }
 
@@ -1863,6 +1938,7 @@ impl fmt::Display for RuntimeError {
                 write!(formatter, "failed to configure recognition: {message}")
             }
             Self::Offline(message) => write!(formatter, "offline automation failed: {message}"),
+            Self::History(message) => write!(formatter, "automation history failed: {message}"),
             Self::Stopped => formatter.write_str("runtime has stopped"),
         }
     }
@@ -1875,6 +1951,7 @@ impl Error for RuntimeError {
             Self::AutomationProfile(_)
             | Self::Recognition(_)
             | Self::Offline(_)
+            | Self::History(_)
             | Self::Stopped => None,
         }
     }
@@ -1883,7 +1960,6 @@ impl Error for RuntimeError {
 #[cfg(test)]
 mod tests {
     use std::{
-        collections::VecDeque,
         fs,
         sync::mpsc::{Receiver, Sender},
         time::{Instant, SystemTime},
@@ -2310,6 +2386,10 @@ mod tests {
         assert_eq!(records[0]["session_elapsed_ms"], 10);
         assert_eq!(records[1]["event"], "input_queued");
         assert_eq!(records[1]["detail"], "keyevent 3");
+        let loaded = load_automation_history(&path).unwrap();
+        assert_eq!(loaded.len(), 2);
+        assert_eq!(loaded[0].event, AutomationHistoryEvent::RuleFired);
+        assert_eq!(loaded[1].event, AutomationHistoryEvent::InputQueued);
         assert!(worker_event_rx.try_recv().is_err());
         fs::remove_file(path).unwrap();
     }

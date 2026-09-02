@@ -14,7 +14,10 @@ use better_e7_runtime::{
 use eframe::egui;
 use tracing::{error, info};
 
-use crate::profile_editor::{ProfileEditor, ProfileEditorCommand};
+use crate::{
+    history_viewer::HistoryViewer,
+    profile_editor::{ProfileEditor, ProfileEditorCommand},
+};
 
 const MAX_VISIBLE_LOGS: usize = 500;
 
@@ -36,6 +39,7 @@ pub struct BetterE7App {
     automation_profile_path: String,
     last_profile_validation: Option<String>,
     profile_editor: ProfileEditor,
+    history_viewer: HistoryViewer,
     automation_dry_run: bool,
     offline_frames_directory: String,
     offline_automation_running: bool,
@@ -69,6 +73,7 @@ impl BetterE7App {
             automation_profile_path: automation_profile_path.clone(),
             last_profile_validation: None,
             profile_editor: ProfileEditor::new(automation_profile_path),
+            history_viewer: HistoryViewer::new(),
             automation_dry_run: config.automation_dry_run,
             offline_frames_directory: String::new(),
             offline_automation_running: false,
@@ -196,6 +201,11 @@ impl BetterE7App {
                     self.push_log(format!(
                         "profileを保存しました: {name} / {templates} templates / {rules} rules"
                     ));
+                }
+                RuntimeEvent::AutomationHistoryLoaded { path, records } => {
+                    let count = records.len();
+                    self.history_viewer.loaded(path, records);
+                    self.push_log(format!("実行履歴を{count}件読み込みました"));
                 }
                 RuntimeEvent::AutomationDryRunChanged(enabled) => {
                     self.automation_dry_run = enabled;
@@ -340,6 +350,7 @@ impl BetterE7App {
         let mut dry_run = None;
         let mut offline_command = None;
         let mut open_editor = false;
+        let mut history_path = None;
         egui::SidePanel::left("devices")
             .resizable(true)
             .default_width(260.0)
@@ -478,6 +489,15 @@ impl BetterE7App {
                         .as_deref()
                         .unwrap_or("無効")
                 ));
+                if ui
+                    .add_enabled(
+                        self.config.automation_history_path.is_some(),
+                        egui::Button::new("履歴を表示"),
+                    )
+                    .clicked()
+                {
+                    history_path = self.config.automation_history_path.clone();
+                }
 
                 ui.separator();
                 ui.heading("オフライン実行");
@@ -535,6 +555,9 @@ impl BetterE7App {
         if open_editor {
             self.profile_editor.set_path(&self.automation_profile_path);
             self.profile_editor.open();
+        }
+        if let Some(path) = history_path {
+            self.send(RuntimeCommand::LoadAutomationHistory(path));
         }
     }
 
@@ -723,6 +746,9 @@ impl eframe::App for BetterE7App {
                     self.send(RuntimeCommand::SaveAutomationProfile { path, profile });
                 }
             }
+        }
+        if let Some(path) = self.history_viewer.show(context) {
+            self.send(RuntimeCommand::LoadAutomationHistory(path));
         }
         context.request_repaint_after(Duration::from_millis(100));
     }

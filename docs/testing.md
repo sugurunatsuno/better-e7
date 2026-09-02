@@ -40,6 +40,7 @@ Android端末が必要な確認と、通常の自動テストを分けます。
 - オフライン実行でも履歴へRuleと予定入力を順番に保存することを検証する
 - 実行履歴を発生順のJSONLとして保存できることを検証する
 - JSONLのprofile / Rule / event / session経過時間 / 入力内容を検証する
+- 保存したJSONLを履歴viewer用のrecordへ読み戻せることを検証する
 
 このテストはUbuntu CIで実行し、ADB / scrcpy-server / FFmpegを必要としません。
 

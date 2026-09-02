@@ -100,6 +100,8 @@ profileにtemplateがなくてもRule engineは動きます。この構成は`al
 
 `automation_history_path`を設定すると、Ruleの発火と入力の処理結果をJSONLへ追記します。dry-runでは`input_planned`、通常実行では`input_queued`として区別します。
 
+履歴を表示を押すと、最新10000件をGUIへ読み込みます。profile / Rule / eventのfilterを組み合わせて、必要なrecordだけを確認できます。再読み込みを押すと実行中に追記されたrecordも反映します。
+
 ## オフライン実行
 
 GUIのオフライン実行へ録画から抽出したFrameのdirectoryを指定すると、PNG / JPEGを名前順に読みます。読み込んだFrameは通常実行と同じtemplate認識とRule engineを通りますが、Android入力は行わず、Actionは予定入力として表示します。
