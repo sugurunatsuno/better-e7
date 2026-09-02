@@ -59,6 +59,8 @@ cargo run -p better-e7-app
 
 汎用profileの書き方は [docs/automation-profiles.md](docs/automation-profiles.md) にあります。
 
+通常CIはUbuntuだけで実行します。Windows / macOSの確認は必要な場合だけ手動workflowを使います。
+
 ## ライセンス
 
 現時点ではライセンスを付与していません。公開や外部配布を始める前に決定します。
