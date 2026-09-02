@@ -314,7 +314,8 @@ async fn run_coordinator(
                             send_event(&event_tx, RuntimeEvent::Error(message));
                         }
                         WorkerEvent::DetectionsUpdated(detections) => {
-                            if let (Some(engine), Some(started_at)) =
+                            if connection_state == ConnectionState::Connected
+                                && let (Some(engine), Some(started_at)) =
                                 (automation_engine.as_mut(), automation_started_at)
                             {
                                 match engine.tick(&detections, started_at.elapsed()) {
