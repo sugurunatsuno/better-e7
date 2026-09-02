@@ -30,12 +30,8 @@ pub trait ServerProcess: Send {
 }
 
 pub trait ScrcpyBackend: Send + Sync {
-    fn push_server(
-        &self,
-        serial: &str,
-        local_path: &Path,
-        remote_path: &str,
-    ) -> Result<(), String>;
+    fn push_server(&self, serial: &str, local_path: &Path, remote_path: &str)
+    -> Result<(), String>;
     fn create_forward(&self, serial: &str, local_port: u16) -> Result<(), String>;
     fn start_server(
         &self,
@@ -78,10 +74,7 @@ impl ScrcpySessionFactory {
     }
 
     #[must_use]
-    pub fn with_backend(
-        backend: Arc<dyn ScrcpyBackend>,
-        options: ScrcpySessionOptions,
-    ) -> Self {
+    pub fn with_backend(backend: Arc<dyn ScrcpyBackend>, options: ScrcpySessionOptions) -> Self {
         Self { backend, options }
     }
 }
@@ -138,19 +131,13 @@ impl ActiveVideoSession for ScrcpySession {
             .video
             .as_mut()
             .ok_or_else(|| SessionError::new(SessionStage::ReadVideo, "session is stopped"))?;
-        video
-            .read(buffer)
-            .map_err(|error| {
-                let retryable = matches!(
-                    error.kind(),
-                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
-                );
-                SessionError::with_retryable(
-                    SessionStage::ReadVideo,
-                    error.to_string(),
-                    retryable,
-                )
-            })
+        video.read(buffer).map_err(|error| {
+            let retryable = matches!(
+                error.kind(),
+                io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+            );
+            SessionError::with_retryable(SessionStage::ReadVideo, error.to_string(), retryable)
+        })
     }
 
     fn stop(&mut self) -> Result<(), SessionError> {
@@ -359,11 +346,7 @@ impl SessionError {
         }
     }
 
-    fn with_retryable(
-        stage: SessionStage,
-        message: impl Into<String>,
-        retryable: bool,
-    ) -> Self {
+    fn with_retryable(stage: SessionStage, message: impl Into<String>, retryable: bool) -> Self {
         Self {
             stage,
             message: message.into(),

@@ -9,9 +9,7 @@ use std::{
 };
 
 use better_e7_adb::{AdbClient, AdbDevice, DeviceLister};
-use better_e7_android::{
-    ActiveVideoSession, ScrcpySessionFactory, VideoSessionFactory,
-};
+use better_e7_android::{ActiveVideoSession, ScrcpySessionFactory, VideoSessionFactory};
 use better_e7_config::AppConfig;
 use tokio::{
     runtime::{Builder, Runtime},

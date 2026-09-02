@@ -19,9 +19,7 @@ impl Default for AppConfig {
         Self {
             adb_path: PathBuf::from("adb"),
             device_refresh_interval_ms: 2_000,
-            scrcpy_server_path: PathBuf::from(
-                "third_party/scrcpy/scrcpy-server-v4.1",
-            ),
+            scrcpy_server_path: PathBuf::from("third_party/scrcpy/scrcpy-server-v4.1"),
             scrcpy_local_port: 27_183,
             scrcpy_max_size: 1_920,
         }
