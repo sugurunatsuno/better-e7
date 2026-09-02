@@ -13,6 +13,7 @@ better-e7-android = { path = "../better-e7-android" }
 better-e7-config = { path = "../better-e7-config" }
 better-e7-core = { path = "../better-e7-core" }
 better-e7-video = { path = "../better-e7-video" }
+better-e7-vision = { path = "../better-e7-vision" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
 
 [lints]

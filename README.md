@@ -2,7 +2,7 @@
 
 Androidゲームの映像取得 / 認識 / 操作 / タスク実行を、macOS / Windows / Linuxで共通化する自動化基盤です。
 
-現在は映像previewとADB入力まで実装しています。Rustとeguiを使い、Androidとの接続はADBと固定versionのscrcpy-serverを使います。
+現在は映像preview / ADB入力 / template認識まで実装しています。Rustとeguiを使い、Androidとの接続はADBと固定versionのscrcpy-serverを使います。
 
 ## 目標
 
@@ -21,10 +21,10 @@ Androidゲームの映像取得 / 認識 / 操作 / タスク実行を、macOS /
 | 非同期処理 | Tokio |
 | Android接続 | ADB / scrcpy-server |
 | 映像デコード | FFmpeg |
-| 画像認識 | OpenCV |
+| 画像認識 | pure Rust template matcher / 将来OpenCV |
 | 推論 | ONNX Runtime |
 
-映像decodeは外部FFmpeg processを交換可能な境界の内側で使います。OpenCV / ONNX Runtimeは必要になるまでworkspaceへ追加しません。
+映像decodeは外部FFmpeg processを交換可能な境界の内側で使います。最初のtemplate matcherはpure Rustで実装し、OpenCV / ONNX Runtimeは必要になるまでworkspaceへ追加しません。
 
 ## 現在の構成
 
@@ -36,6 +36,7 @@ crates/
   better-e7-config/ TOML設定
   better-e7-runtime/ Worker / 状態管理 / 最新Frame / 入力queue
   better-e7-video/ H.264 parser / FFmpeg process decoder
+  better-e7-vision/ 保存画像source / template matcher
   better-e7-app/   eguiデスクトップアプリ
 docs/
   decisions/       技術判断の記録

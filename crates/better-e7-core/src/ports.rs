@@ -1,6 +1,6 @@
 use std::{error::Error, fmt, time::Duration};
 
-use crate::{Frame, NormalizedPoint};
+use crate::{Frame, NormalizedPoint, NormalizedRect};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum InputCommand {
@@ -85,6 +85,7 @@ pub struct Detection {
     pub label: String,
     pub confidence: f32,
     pub center: NormalizedPoint,
+    pub bounds: NormalizedRect,
 }
 
 pub trait Recognizer: Send + Sync {

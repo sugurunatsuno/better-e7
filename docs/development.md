@@ -8,7 +8,7 @@
 - 対応バージョンのscrcpy-server
 - FFmpeg
 
-FFmpegは映像プレビューの実行時に必要です。通常の単体テストは模擬PPM streamを使うため、FFmpegやAndroid端末なしで実行できます。OpenCV / ONNX Runtimeは、それぞれを使うcrateへ着手するときに追加します。
+FFmpegは映像プレビューの実行時に必要です。通常の単体テストは模擬PPM streamと生成画像を使うため、FFmpegやAndroid端末なしで実行できます。OpenCV / ONNX Runtimeは、それぞれが必要になった時点で追加します。
 
 ## 初回確認
 
@@ -24,6 +24,8 @@ ADBがPATHにない場合は`better-e7.toml`の`adb_path`を変更してくだ�
 実機で映像接続を確認するときは、`third_party/scrcpy/README.md`に記載したscrcpy-server v4.1を配置します。通常の単体テストではserver binaryもAndroid端末も不要です。
 
 FFmpegがPATHにない場合は`better-e7.toml`の`ffmpeg_path`を変更します。
+
+template認識を試す場合は検出対象を切り出したPNGまたはJPEGを用意し、`recognition_template_path`へ設定します。しきい値は`recognition_threshold`で調整します。未指定の場合は認識を無効にしたまま起動できます。
 
 ## 実装の進め方
 

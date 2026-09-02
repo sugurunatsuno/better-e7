@@ -3,7 +3,7 @@ use std::{
     fmt,
     path::PathBuf,
     sync::{
-        Arc, Mutex,
+        Arc, Condvar, Mutex,
         atomic::{AtomicBool, Ordering},
         mpsc as std_mpsc,
     },
@@ -14,8 +14,11 @@ use std::{
 use better_e7_adb::{AdbClient, AdbDevice, AdbInputController, DeviceLister};
 use better_e7_android::{ActiveVideoSession, ScrcpySessionFactory, VideoSessionFactory};
 use better_e7_config::AppConfig;
-use better_e7_core::{Frame, InputCommand, InputController, PixelInputCommand};
+use better_e7_core::{
+    Detection, Frame, InputCommand, InputController, NormalizedRect, PixelInputCommand, Recognizer,
+};
 use better_e7_video::{FfmpegProcessDecoderFactory, VideoDecoder, VideoDecoderFactory};
+use better_e7_vision::TemplateMatcher;
 use tokio::{
     runtime::{Builder, Runtime},
     sync::mpsc,
@@ -49,7 +52,7 @@ pub enum ConnectionState {
     Disconnecting,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum RuntimeEvent {
     DevicesUpdated(Vec<AdbDevice>),
     SelectedDeviceChanged(Option<String>),
@@ -58,6 +61,7 @@ pub enum RuntimeEvent {
     VideoBytesReceived(u64),
     InputQueued(PixelInputCommand),
     InputExecuted(PixelInputCommand),
+    DetectionsUpdated(Vec<Detection>),
     Error(String),
 }
 
@@ -88,6 +92,7 @@ impl AppRuntime {
             Arc::new(ScrcpySessionFactory::new(config));
         let decoder_factory: Arc<dyn VideoDecoderFactory> =
             Arc::new(FfmpegProcessDecoderFactory::new(config.ffmpeg_path.clone()));
+        let recognizer = build_recognizer(config)?;
         let latest_frame = Arc::new(Mutex::new(LatestFrameStore::default()));
         let refresh_interval = Duration::from_millis(config.device_refresh_interval_ms);
 
@@ -97,6 +102,7 @@ impl AppRuntime {
             decoder_factory,
             latest_frame: Arc::clone(&latest_frame),
             adb_path: config.adb_path.clone(),
+            recognizer,
         };
         let _coordinator = runtime.spawn(run_coordinator(
             resources,
@@ -140,6 +146,25 @@ struct CoordinatorResources {
     decoder_factory: Arc<dyn VideoDecoderFactory>,
     latest_frame: Arc<Mutex<LatestFrameStore>>,
     adb_path: PathBuf,
+    recognizer: Option<Arc<dyn Recognizer>>,
+}
+
+fn build_recognizer(config: &AppConfig) -> Result<Option<Arc<dyn Recognizer>>, RuntimeError> {
+    let Some(path) = config.recognition_template_path.as_ref() else {
+        return Ok(None);
+    };
+    let label = path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("template");
+    let matcher = TemplateMatcher::from_path(
+        label,
+        path,
+        config.recognition_threshold,
+        NormalizedRect::full(),
+    )
+    .map_err(|error| RuntimeError::Recognition(error.to_string()))?;
+    Ok(Some(Arc::new(matcher)))
 }
 
 async fn run_coordinator(
@@ -154,6 +179,7 @@ async fn run_coordinator(
         decoder_factory,
         latest_frame,
         adb_path,
+        recognizer,
     } = resources;
     let mut interval = tokio::time::interval(refresh_interval);
     interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
@@ -164,6 +190,7 @@ async fn run_coordinator(
     let mut connection_state = ConnectionState::Disconnected;
     let mut video_worker_stop: Option<Arc<AtomicBool>> = None;
     let mut input_queue: Option<InputQueue> = None;
+    let mut recognition_worker: Option<RecognitionWorker> = None;
 
     loop {
         tokio::select! {
@@ -177,6 +204,7 @@ async fn run_coordinator(
                         automation_state: &mut automation_state,
                         connection_state: &mut connection_state,
                         input_queue: &mut input_queue,
+                        recognition_worker: &mut recognition_worker,
                         video_worker_stop: video_worker_stop.as_ref(),
                     },
                 ).await;
@@ -192,6 +220,9 @@ async fn run_coordinator(
                                 queue.stop();
                             }
                             video_worker_stop = None;
+                            if let Some(mut worker) = recognition_worker.take() {
+                                worker.stop();
+                            }
                             automation_state = AutomationState::Stopped;
                             connection_state = ConnectionState::Disconnected;
                             send_event(
@@ -202,6 +233,7 @@ async fn run_coordinator(
                                 &event_tx,
                                 RuntimeEvent::ConnectionStateChanged(connection_state),
                             );
+                            send_event(&event_tx, RuntimeEvent::DetectionsUpdated(Vec::new()));
                             if let Err(message) = result {
                                 send_event(&event_tx, RuntimeEvent::Error(message));
                             }
@@ -212,6 +244,12 @@ async fn run_coordinator(
                         WorkerEvent::InputFailed(message) => {
                             send_event(&event_tx, RuntimeEvent::Error(message));
                         }
+                        WorkerEvent::DetectionsUpdated(detections) => {
+                            send_event(&event_tx, RuntimeEvent::DetectionsUpdated(detections));
+                        }
+                        WorkerEvent::RecognitionFailed(message) => {
+                            send_event(&event_tx, RuntimeEvent::Error(message));
+                        }
                     }
                 }
             }
@@ -219,6 +257,7 @@ async fn run_coordinator(
                 let Some(command) = command else {
                     request_video_stop(video_worker_stop.as_ref());
                     request_input_stop(input_queue.as_mut());
+                    request_recognition_stop(recognition_worker.as_mut());
                     break;
                 };
                 match command {
@@ -232,6 +271,7 @@ async fn run_coordinator(
                                 automation_state: &mut automation_state,
                                 connection_state: &mut connection_state,
                                 input_queue: &mut input_queue,
+                                recognition_worker: &mut recognition_worker,
                                 video_worker_stop: video_worker_stop.as_ref(),
                             },
                         ).await;
@@ -309,15 +349,46 @@ async fn run_coordinator(
                                         continue;
                                     }
                                 };
+                                let mut new_recognition_worker = match recognizer.as_ref() {
+                                    Some(recognizer) => match RecognitionWorker::spawn(
+                                        Arc::clone(recognizer),
+                                        worker_event_tx.clone(),
+                                    ) {
+                                        Ok(worker) => Some(worker),
+                                        Err(error) => {
+                                            let mut queue = queue;
+                                            queue.stop();
+                                            let _ = session.stop();
+                                            connection_state = ConnectionState::Disconnected;
+                                            send_event(
+                                                &event_tx,
+                                                RuntimeEvent::ConnectionStateChanged(connection_state),
+                                            );
+                                            send_event(
+                                                &event_tx,
+                                                RuntimeEvent::Error(format!(
+                                                    "failed to start recognition worker: {error}"
+                                                )),
+                                            );
+                                            continue;
+                                        }
+                                    },
+                                    None => None,
+                                };
+                                let recognition_sink = new_recognition_worker
+                                    .as_ref()
+                                    .map(RecognitionWorker::sink);
                                 let stop = Arc::new(AtomicBool::new(false));
                                 spawn_video_worker(
                                     session,
                                     Arc::clone(&decoder_factory),
                                     Arc::clone(&latest_frame),
+                                    recognition_sink,
                                     Arc::clone(&stop),
                                     worker_event_tx.clone(),
                                 );
                                 input_queue = Some(queue);
+                                recognition_worker = new_recognition_worker.take();
                                 video_worker_stop = Some(stop);
                                 automation_state = AutomationState::Running;
                                 connection_state = ConnectionState::Connected;
@@ -329,6 +400,7 @@ async fn run_coordinator(
                                     &event_tx,
                                     RuntimeEvent::ConnectionStateChanged(connection_state),
                                 );
+                                send_event(&event_tx, RuntimeEvent::DetectionsUpdated(Vec::new()));
                             }
                             Ok(Err(error)) => {
                                 connection_state = ConnectionState::Disconnected;
@@ -359,6 +431,7 @@ async fn run_coordinator(
                                 RuntimeEvent::ConnectionStateChanged(connection_state),
                             );
                             request_input_stop(input_queue.as_mut());
+                            request_recognition_stop(recognition_worker.as_mut());
                             request_video_stop(video_worker_stop.as_ref());
                         }
                     }
@@ -393,6 +466,7 @@ async fn run_coordinator(
                     }
                     RuntimeCommand::Shutdown => {
                         request_input_stop(input_queue.as_mut());
+                        request_recognition_stop(recognition_worker.as_mut());
                         request_video_stop(video_worker_stop.as_ref());
                         break;
                     }
@@ -408,6 +482,7 @@ struct DeviceRefreshState<'a> {
     automation_state: &'a mut AutomationState,
     connection_state: &'a mut ConnectionState,
     input_queue: &'a mut Option<InputQueue>,
+    recognition_worker: &'a mut Option<RecognitionWorker>,
     video_worker_stop: Option<&'a Arc<AtomicBool>>,
 }
 
@@ -427,6 +502,7 @@ async fn refresh_devices(
             if !selected_is_ready && state.selected_device.take().is_some() {
                 send_event(event_tx, RuntimeEvent::SelectedDeviceChanged(None));
                 request_input_stop(state.input_queue.as_mut());
+                request_recognition_stop(state.recognition_worker.as_mut());
                 request_video_stop(state.video_worker_stop);
                 if *state.automation_state == AutomationState::Running {
                     *state.automation_state = AutomationState::Stopped;
@@ -459,6 +535,7 @@ fn spawn_video_worker(
     mut session: Box<dyn ActiveVideoSession>,
     decoder_factory: Arc<dyn VideoDecoderFactory>,
     latest_frame: Arc<Mutex<LatestFrameStore>>,
+    recognition_sink: Option<RecognitionSink>,
     stop: Arc<AtomicBool>,
     worker_event_tx: mpsc::UnboundedSender<WorkerEvent>,
 ) {
@@ -489,7 +566,9 @@ fn spawn_video_worker(
                 Err(error) if error.is_retryable() => {}
                 Err(error) => break Err(error.to_string()),
             }
-            if let Err(error) = store_decoded_frames(decoder.as_mut(), &latest_frame) {
+            if let Err(error) =
+                store_decoded_frames(decoder.as_mut(), &latest_frame, recognition_sink.as_ref())
+            {
                 break Err(error);
             }
         };
@@ -502,11 +581,15 @@ fn spawn_video_worker(
 fn store_decoded_frames(
     decoder: &mut dyn VideoDecoder,
     latest_frame: &Mutex<LatestFrameStore>,
+    recognition_sink: Option<&RecognitionSink>,
 ) -> Result<(), String> {
     while let Some(frame) = decoder
         .try_next_frame()
         .map_err(|error| error.to_string())?
     {
+        if let Some(sink) = recognition_sink {
+            sink.submit(frame.clone());
+        }
         let mut slot = latest_frame
             .lock()
             .map_err(|_| "latest frame store is unavailable".to_owned())?;
@@ -514,6 +597,116 @@ fn store_decoded_frames(
         slot.pending = Some(frame);
     }
     Ok(())
+}
+
+#[derive(Default)]
+struct RecognitionState {
+    pending: Option<Frame>,
+    stopped: bool,
+}
+
+#[derive(Clone)]
+struct RecognitionSink {
+    shared: Arc<(Mutex<RecognitionState>, Condvar)>,
+}
+
+impl RecognitionSink {
+    fn submit(&self, frame: Frame) {
+        let (state, ready) = &*self.shared;
+        if let Ok(mut state) = state.lock()
+            && !state.stopped
+        {
+            state.pending = Some(frame);
+            ready.notify_one();
+        }
+    }
+
+    fn request_stop(&self) {
+        let (state, ready) = &*self.shared;
+        if let Ok(mut state) = state.lock() {
+            state.stopped = true;
+            state.pending = None;
+            ready.notify_all();
+        }
+    }
+}
+
+struct RecognitionWorker {
+    sink: RecognitionSink,
+    worker: Option<JoinHandle<()>>,
+}
+
+impl RecognitionWorker {
+    fn spawn(
+        recognizer: Arc<dyn Recognizer>,
+        worker_event_tx: mpsc::UnboundedSender<WorkerEvent>,
+    ) -> Result<Self, std::io::Error> {
+        let sink = RecognitionSink {
+            shared: Arc::new((Mutex::new(RecognitionState::default()), Condvar::new())),
+        };
+        let worker_sink = sink.clone();
+        let worker = thread::Builder::new()
+            .name("better-e7-recognition".to_owned())
+            .spawn(move || {
+                loop {
+                    let frame = {
+                        let (state, ready) = &*worker_sink.shared;
+                        let mut state = match state.lock() {
+                            Ok(state) => state,
+                            Err(_) => break,
+                        };
+                        while state.pending.is_none() && !state.stopped {
+                            state = match ready.wait(state) {
+                                Ok(state) => state,
+                                Err(_) => return,
+                            };
+                        }
+                        if state.stopped {
+                            break;
+                        }
+                        state.pending.take()
+                    };
+                    let Some(frame) = frame else {
+                        continue;
+                    };
+                    match recognizer.recognize(&frame) {
+                        Ok(detections) => {
+                            let _ = worker_event_tx
+                                .send(WorkerEvent::DetectionsUpdated(detections));
+                        }
+                        Err(error) => {
+                            let _ = worker_event_tx
+                                .send(WorkerEvent::RecognitionFailed(error.to_string()));
+                        }
+                    }
+                }
+            })?;
+        Ok(Self {
+            sink,
+            worker: Some(worker),
+        })
+    }
+
+    fn sink(&self) -> RecognitionSink {
+        self.sink.clone()
+    }
+
+    fn request_stop(&self) {
+        self.sink.request_stop();
+    }
+
+    fn stop(&mut self) {
+        self.request_stop();
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+}
+
+impl Drop for RecognitionWorker {
+    fn drop(&mut self) {
+        self.stop();
+    }
 }
 
 struct InputQueue {
@@ -617,6 +810,12 @@ fn request_input_stop(queue: Option<&mut InputQueue>) {
     }
 }
 
+fn request_recognition_stop(worker: Option<&mut RecognitionWorker>) {
+    if let Some(worker) = worker {
+        worker.request_stop();
+    }
+}
+
 fn send_event(event_tx: &mpsc::UnboundedSender<RuntimeEvent>, event: RuntimeEvent) {
     let _ = event_tx.send(event);
 }
@@ -626,11 +825,14 @@ enum WorkerEvent {
     VideoEnded(Result<(), String>),
     InputExecuted(PixelInputCommand),
     InputFailed(String),
+    DetectionsUpdated(Vec<Detection>),
+    RecognitionFailed(String),
 }
 
 #[derive(Debug)]
 pub enum RuntimeError {
     Build(std::io::Error),
+    Recognition(String),
     Stopped,
 }
 
@@ -638,6 +840,9 @@ impl fmt::Display for RuntimeError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Build(error) => write!(formatter, "failed to build runtime: {error}"),
+            Self::Recognition(message) => {
+                write!(formatter, "failed to configure recognition: {message}")
+            }
             Self::Stopped => formatter.write_str("runtime has stopped"),
         }
     }
@@ -647,7 +852,7 @@ impl Error for RuntimeError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Build(error) => Some(error),
-            Self::Stopped => None,
+            Self::Recognition(_) | Self::Stopped => None,
         }
     }
 }
@@ -675,6 +880,12 @@ mod tests {
         release_rx: Mutex<Receiver<()>>,
     }
 
+    struct BlockingRecognizer {
+        frame_ids: Mutex<Vec<u64>>,
+        started_tx: Sender<u64>,
+        release_first_rx: Mutex<Receiver<()>>,
+    }
+
     impl VideoDecoder for MockDecoder {
         fn push(&mut self, _data: &[u8]) -> Result<(), VideoDecodeError> {
             Ok(())
@@ -694,6 +905,20 @@ mod tests {
         }
     }
 
+    impl Recognizer for BlockingRecognizer {
+        fn recognize(
+            &self,
+            frame: &Frame,
+        ) -> Result<Vec<Detection>, better_e7_core::RecognitionError> {
+            self.frame_ids.lock().unwrap().push(frame.id());
+            let _ = self.started_tx.send(frame.id());
+            if frame.id() == 1 {
+                let _ = self.release_first_rx.lock().unwrap().recv();
+            }
+            Ok(Vec::new())
+        }
+    }
+
     #[test]
     fn keeps_only_the_latest_decoded_frame() {
         let frames = [1_u64, 2]
@@ -703,7 +928,7 @@ mod tests {
         let mut decoder = MockDecoder { frames };
         let latest = Mutex::new(LatestFrameStore::default());
 
-        store_decoded_frames(&mut decoder, &latest).unwrap();
+        store_decoded_frames(&mut decoder, &latest, None).unwrap();
 
         let latest = latest.lock().unwrap();
         assert_eq!(latest.pending.as_ref().unwrap().id(), 2);
@@ -747,5 +972,38 @@ mod tests {
         queue.stop();
 
         assert_eq!(controller.commands.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn recognition_worker_replaces_an_unprocessed_frame() {
+        let (started_tx, started_rx) = std_mpsc::channel();
+        let (release_tx, release_rx) = std_mpsc::channel();
+        let recognizer = Arc::new(BlockingRecognizer {
+            frame_ids: Mutex::new(Vec::new()),
+            started_tx,
+            release_first_rx: Mutex::new(release_rx),
+        });
+        let (worker_event_tx, _worker_event_rx) = mpsc::unbounded_channel();
+        let mut worker = RecognitionWorker::spawn(recognizer.clone(), worker_event_tx).unwrap();
+        let sink = worker.sink();
+        let frame = |id| {
+            Frame::new(id, Instant::now(), 1, 1, PixelFormat::Rgb8, vec![0; 3]).unwrap()
+        };
+
+        sink.submit(frame(1));
+        assert_eq!(
+            started_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+            1
+        );
+        sink.submit(frame(2));
+        sink.submit(frame(3));
+        release_tx.send(()).unwrap();
+        assert_eq!(
+            started_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+            3
+        );
+        worker.stop();
+
+        assert_eq!(*recognizer.frame_ids.lock().unwrap(), [1, 3]);
     }
 }

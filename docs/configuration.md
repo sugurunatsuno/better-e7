@@ -9,6 +9,8 @@ device_refresh_interval_ms = 2000
 scrcpy_server_path = "third_party/scrcpy/scrcpy-server-v4.1"
 scrcpy_local_port = 27183
 scrcpy_max_size = 1920
+recognition_threshold = 0.9
+# recognition_template_path = "assets/confirm.png"
 ```
 
 ## adb_path
@@ -42,3 +44,13 @@ ADB forwardでPC側に割り当てるTCP portです。ほかのprocessが使っ�
 ## scrcpy_max_size
 
 Androidから送る映像の最大辺です。初期値は1920です。0を指定するとscrcpy側でサイズを制限しません。
+
+## recognition_template_path
+
+検出するtemplate画像のパスです。PNGとJPEGを読み込めます。未指定の場合は認識workerを起動せず、映像previewと入力だけを動かします。相対パスはアプリを起動したディレクトリから解決されます。
+
+検出labelにはファイル名から拡張子を除いた部分を使います。たとえば`assets/confirm.png`は`confirm`になります。
+
+## recognition_threshold
+
+templateの一致率に対するしきい値です。0.0から1.0の範囲で指定し、初期値は0.9です。誤検出がある場合は上げ、画像圧縮や色の差で検出できない場合は少し下げます。

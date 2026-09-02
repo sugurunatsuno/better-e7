@@ -23,15 +23,15 @@ flowchart TD
 | better-e7-core | Frame / 座標 / ポート / 共通エラー | Rust標準ライブラリ |
 | better-e7-config | TOML設定の読み書きと検証 | serde / toml |
 | better-e7-adb | ADB process / 端末一覧 / 入力 | core / Rust標準ライブラリ |
-| better-e7-runtime | Worker / command / event / 最新Frame / 入力queue | config / core / adb / video / Tokio |
+| better-e7-runtime | Worker / command / event / 最新Frame / 入力queue / 認識worker | config / core / adb / video / vision / Tokio |
 | better-e7-android | scrcpy-server起動 / transport / control | core / adb / Tokio |
 | better-e7-video | ストリーム解析 / デコード / 色変換 | core / FFmpeg |
-| better-e7-vision | テンプレート / 色 / OCR / ONNX | core / OpenCV / ort |
+| better-e7-vision | 保存画像source / テンプレート / 将来の色 / OCR / ONNX | core / image / 将来のOpenCV / ort |
 | better-e7-game-api | ゲーム / Trigger / Task向けAPI | core |
 | better-e7-app | GUI / 構成 / 各処理の起動と停止 | 全公開crate / egui |
 | better-e7-cli | ヘッドレス実行と検証 | GUI以外の公開crate |
 
-現在はcore / config / adb / android / video / runtime / appを実装しています。vision / game-apiは対応する縦切り機能へ着手するときに追加します。
+現在はcore / config / adb / android / video / vision / runtime / appを実装しています。game-apiはゲーム自動化へ着手するときに追加します。
 
 ```mermaid
 flowchart TD
@@ -64,6 +64,10 @@ GUIスレッドではブロッキング処理を行いません。Tokio runtime�
 scrcpy sessionを開始すると、専用のblocking workerがvideo socketを読み続けます。停止flagは500msごとに確認でき、終了時はsocket / server process / ADB forwardの順に片付けます。H.264は外部FFmpeg processの標準入力へ送り、標準出力のPPM streamを`Frame`へ変換します。FFmpegの具象実装は`VideoDecoder`の内側に閉じ込め、将来FFI backendへ交換できるようにします。
 
 デコード済みFrameはruntimeのlatest frame slotへ保存します。GUIが取得する前に次のFrameが届いた場合は古いFrameを置き換え、遅延やメモリ増加を防ぎます。eguiはRGB / RGBAをtextureへ変換し、縦横比を維持してpreviewへ表示します。
+
+認識は映像workerと別のblocking workerで実行します。認識待ちのslotは1枚だけで、新しいFrameが届くと未処理の古いFrameを置き換えます。これにより認識が映像受信を止めず、結果が実画面から大きく遅れることも防ぎます。
+
+最初の認識backendはpure RustのRGB template matcherです。正規化されたROI内を粗く探索し、最良候補の周辺を1pixel単位で再探索します。検出結果はlabel / confidence / center / boundsを持ち、egui previewへ正規化矩形として重ねます。OpenCVは複数templateや高度な処理が必要になった時点で、同じ`Recognizer`境界の内側へ追加します。
 
 入力は容量64件の専用queueで順番に処理します。ADB commandは入力workerだけが実行するため、同時に複数の操作を送りません。停止時は新しい入力を拒否して未実行のqueueを破棄し、実行中のcommandが終了してからworkerを閉じます。
 

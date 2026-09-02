@@ -1,8 +1,10 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use better_e7_adb::AdbDevice;
 use better_e7_config::AppConfig;
-use better_e7_core::{Frame, InputCommand, NormalizedPoint, PixelFormat, PixelInputCommand};
+use better_e7_core::{
+    Detection, Frame, InputCommand, NormalizedPoint, PixelFormat, PixelInputCommand,
+};
 use better_e7_runtime::{
     AppRuntime, AutomationState, ConnectionState, RuntimeCommand, RuntimeEvent,
 };
@@ -20,6 +22,10 @@ pub struct BetterE7App {
     video_bytes_received: u64,
     preview_texture: Option<egui::TextureHandle>,
     preview_resolution: Option<[usize; 2]>,
+    detections: Vec<Detection>,
+    recognition_fps: f32,
+    recognition_updates: u32,
+    recognition_window_started: Instant,
     logs: Vec<String>,
 }
 
@@ -34,6 +40,10 @@ impl BetterE7App {
             video_bytes_received: 0,
             preview_texture: None,
             preview_resolution: None,
+            detections: Vec::new(),
+            recognition_fps: 0.0,
+            recognition_updates: 0,
+            recognition_window_started: Instant::now(),
             logs: vec!["better-e7を起動しました".to_owned()],
         };
 
@@ -87,6 +97,10 @@ impl BetterE7App {
                         self.video_bytes_received = 0;
                         self.preview_texture = None;
                         self.preview_resolution = None;
+                        self.detections.clear();
+                        self.recognition_fps = 0.0;
+                        self.recognition_updates = 0;
+                        self.recognition_window_started = Instant::now();
                     }
                     self.push_log(match state {
                         ConnectionState::Disconnected => "映像接続を終了しました",
@@ -101,6 +115,16 @@ impl BetterE7App {
                 RuntimeEvent::InputQueued(_) => {}
                 RuntimeEvent::InputExecuted(command) => {
                     self.push_log(format!("入力を実行しました: {}", describe_input(command)));
+                }
+                RuntimeEvent::DetectionsUpdated(detections) => {
+                    self.detections = detections;
+                    self.recognition_updates = self.recognition_updates.saturating_add(1);
+                    let elapsed = self.recognition_window_started.elapsed();
+                    if elapsed >= Duration::from_secs(1) {
+                        self.recognition_fps = self.recognition_updates as f32 / elapsed.as_secs_f32();
+                        self.recognition_updates = 0;
+                        self.recognition_window_started = Instant::now();
+                    }
                 }
                 RuntimeEvent::Error(message) => {
                     error!(%message, "runtime error");
@@ -304,6 +328,7 @@ impl BetterE7App {
                     egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
                     egui::Color32::WHITE,
                 );
+                self.paint_detections(ui.painter(), image_rect);
                 if self.connection_state == ConnectionState::Connected
                     && response.clicked()
                     && let Some(position) = response.interact_pointer_pos()
@@ -336,7 +361,8 @@ impl BetterE7App {
                 "端末: {}",
                 self.selected_device.as_deref().unwrap_or("未選択")
             ));
-            ui.label("認識FPS: --");
+            ui.label(format!("認識FPS: {:.1}", self.recognition_fps));
+            ui.label(format!("検出数: {}", self.detections.len()));
             ui.label(format!("受信量: {} bytes", self.video_bytes_received));
             let resolution = self
                 .preview_resolution
@@ -347,6 +373,35 @@ impl BetterE7App {
         });
         if let Some(command) = input_command {
             self.send(RuntimeCommand::SubmitInput(command));
+        }
+    }
+
+    fn paint_detections(&self, painter: &egui::Painter, image_rect: egui::Rect) {
+        let color = egui::Color32::from_rgb(80, 220, 120);
+        let stroke = egui::Stroke::new(2.0, color);
+        for detection in &self.detections {
+            let bounds = detection.bounds;
+            let min = egui::pos2(
+                image_rect.min.x + bounds.left() * image_rect.width(),
+                image_rect.min.y + bounds.top() * image_rect.height(),
+            );
+            let max = egui::pos2(
+                image_rect.min.x + bounds.right() * image_rect.width(),
+                image_rect.min.y + bounds.bottom() * image_rect.height(),
+            );
+            let top_right = egui::pos2(max.x, min.y);
+            let bottom_left = egui::pos2(min.x, max.y);
+            painter.line_segment([min, top_right], stroke);
+            painter.line_segment([top_right, max], stroke);
+            painter.line_segment([max, bottom_left], stroke);
+            painter.line_segment([bottom_left, min], stroke);
+            painter.text(
+                min + egui::vec2(2.0, -2.0),
+                egui::Align2::LEFT_BOTTOM,
+                format!("{} {:.0}%", detection.label, detection.confidence * 100.0),
+                egui::FontId::monospace(13.0),
+                color,
+            );
         }
     }
 

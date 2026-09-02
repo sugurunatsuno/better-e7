@@ -13,6 +13,10 @@ Android端末が必要な確認と、通常の自動テストを分けます。
 - 正規化座標からpixel座標への変換を検証する
 - ADB tap / swipe / keyのargumentをmock runnerで検証する
 - 入力停止時に未実行のqueueが破棄されることを検証する
+- 保存画像を`VideoSource`として1回だけ取得できることを検証する
+- 生成したRGB画像からtemplateの位置と正規化矩形を検出する
+- ROI外の一致を検出しないことを検証する
+- 認識中に複数Frameが届いた場合、未処理Frameを最新のものへ置き換えることを検証する
 
 このテストはUbuntu CIで実行し、ADB / scrcpy-server / FFmpegを必要としません。
 
@@ -30,3 +34,4 @@ Android端末が必要な確認と、通常の自動テストを分けます。
 - 停止後にADB forwardが削除される
 - 停止後に入力が送信されない
 - USBを抜いた場合にsessionが停止する
+- `recognition_template_path`を指定すると一致箇所にlabel / confidence / 矩形が表示される

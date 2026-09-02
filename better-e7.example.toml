@@ -4,3 +4,5 @@ device_refresh_interval_ms = 2000
 scrcpy_server_path = "third_party/scrcpy/scrcpy-server-v4.1"
 scrcpy_local_port = 27183
 scrcpy_max_size = 1920
+recognition_threshold = 0.9
+# recognition_template_path = "assets/confirm.png"
