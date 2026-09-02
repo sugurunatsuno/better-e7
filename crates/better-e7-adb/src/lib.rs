@@ -1,10 +1,4 @@
-use std::{
-    error::Error,
-    fmt, io,
-    path::PathBuf,
-    process::Command,
-    sync::Arc,
-};
+use std::{error::Error, fmt, io, path::PathBuf, process::Command, sync::Arc};
 
 use better_e7_core::{InputController, InputError, PixelInputCommand};
 
@@ -121,10 +115,7 @@ impl AdbInputController {
     }
 
     #[must_use]
-    pub fn with_runner(
-        runner: Arc<dyn AdbCommandRunner>,
-        serial: impl Into<String>,
-    ) -> Self {
+    pub fn with_runner(runner: Arc<dyn AdbCommandRunner>, serial: impl Into<String>) -> Self {
         Self {
             runner,
             serial: serial.into(),
@@ -320,9 +311,6 @@ mod tests {
                 vec!["swipe", "10", "20", "30", "40", "250"]
             )
         );
-        assert_eq!(
-            calls[2],
-            ("device-1".to_owned(), vec!["keyevent", "4"])
-        );
+        assert_eq!(calls[2], ("device-1".to_owned(), vec!["keyevent", "4"]));
     }
 }

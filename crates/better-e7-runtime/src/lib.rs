@@ -516,8 +516,8 @@ impl InputQueue {
                             }
                             match controller.submit(command) {
                                 Ok(()) => {
-                                    let _ = worker_event_tx
-                                        .send(WorkerEvent::InputExecuted(command));
+                                    let _ =
+                                        worker_event_tx.send(WorkerEvent::InputExecuted(command));
                                 }
                                 Err(error) => {
                                     let _ = worker_event_tx
@@ -556,9 +556,7 @@ impl InputQueue {
             .ok_or_else(|| "input queue has stopped".to_owned())?;
         sender.try_send(command).map_err(|error| match error {
             std_mpsc::TrySendError::Full(_) => "input queue is full".to_owned(),
-            std_mpsc::TrySendError::Disconnected(_) => {
-                "input queue worker has stopped".to_owned()
-            }
+            std_mpsc::TrySendError::Disconnected(_) => "input queue worker has stopped".to_owned(),
         })?;
         Ok(command)
     }
