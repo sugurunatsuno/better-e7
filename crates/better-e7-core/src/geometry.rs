@@ -40,7 +40,11 @@ pub struct PointError {
 
 impl fmt::Display for PointError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "normalized point must be within 0.0..=1.0: ({}, {})", self.x, self.y)
+        write!(
+            f,
+            "normalized point must be within 0.0..=1.0: ({}, {})",
+            self.x, self.y
+        )
     }
 }
 
@@ -52,8 +56,14 @@ mod tests {
 
     #[test]
     fn converts_edges_to_pixel_coordinates() {
-        assert_eq!(NormalizedPoint::new(0.0, 0.0).unwrap().to_pixels(100, 50), (0, 0));
-        assert_eq!(NormalizedPoint::new(1.0, 1.0).unwrap().to_pixels(100, 50), (99, 49));
+        assert_eq!(
+            NormalizedPoint::new(0.0, 0.0).unwrap().to_pixels(100, 50),
+            (0, 0)
+        );
+        assert_eq!(
+            NormalizedPoint::new(1.0, 1.0).unwrap().to_pixels(100, 50),
+            (99, 49)
+        );
     }
 
     #[test]
@@ -62,4 +72,3 @@ mod tests {
         assert!(NormalizedPoint::new(0.5, 1.1).is_err());
     }
 }
-

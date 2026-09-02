@@ -8,4 +8,3 @@ pub use ports::{
     Detection, InputCommand, InputController, InputError, RecognitionError, Recognizer,
     VideoSource, VideoSourceError,
 };
-

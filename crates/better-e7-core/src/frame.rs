@@ -5,7 +5,6 @@ pub enum PixelFormat {
     Rgb8,
     Rgba8,
 }
-
 impl PixelFormat {
     #[must_use]
     pub const fn bytes_per_pixel(self) -> usize {
@@ -118,4 +117,3 @@ mod tests {
         );
     }
 }
-

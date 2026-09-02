@@ -10,7 +10,7 @@ version = "0.1.0"
 edition = "2024"
 license = "UNLICENSED"
 repository = "https://github.com/sugurunatsuno/better-e7"
-rust-version = "1.85"
+rust-version = "1.88"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

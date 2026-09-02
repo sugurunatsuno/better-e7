@@ -31,9 +31,16 @@ impl eframe::App for BetterE7App {
             ui.horizontal(|ui| {
                 ui.heading("better-e7");
                 ui.separator();
-                let status = if self.running { "実行中" } else { "停止中" };
+                let status = if self.running {
+                    "実行中"
+                } else {
+                    "停止中"
+                };
                 ui.label(status);
-                if ui.button(if self.running { "停止" } else { "開始" }).clicked() {
+                if ui
+                    .button(if self.running { "停止" } else { "開始" })
+                    .clicked()
+                {
                     self.running = !self.running;
                 }
             });
@@ -61,7 +68,8 @@ impl eframe::App for BetterE7App {
                 egui::vec2(available.x, preview_height),
                 egui::Sense::hover(),
             );
-            ui.painter().rect_filled(rect, 6.0, egui::Color32::from_gray(24));
+            ui.painter()
+                .rect_filled(rect, 6.0, egui::Color32::from_gray(24));
             ui.painter().text(
                 rect.center(),
                 egui::Align2::CENTER_CENTER,
@@ -88,4 +96,3 @@ impl eframe::App for BetterE7App {
             });
     }
 }
-

@@ -2,7 +2,7 @@
 
 ## 必要なもの
 
-- Rust 1.85以降
+- Rust 1.88以降
 - rustfmt / Clippy
 - Android Platform Tools
 - 対応バージョンのscrcpy-server
@@ -48,4 +48,3 @@ flowchart LR
 ## ローカル制約
 
 Android実機を使う結合テストは通常のCIから分けます。通常CIは保存フレーム / 模擬VideoSource / 模擬InputControllerを使い、決定的に実行できるテストだけを対象にします。
-

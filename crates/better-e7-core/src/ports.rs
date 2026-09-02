@@ -56,4 +56,3 @@ macro_rules! string_error {
 string_error!(InputError);
 string_error!(VideoSourceError);
 string_error!(RecognitionError);
-
