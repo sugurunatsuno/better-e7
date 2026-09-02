@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 const MINIMUM_REFRESH_INTERVAL_MS: u64 = 250;
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct AppConfig {
     pub adb_path: PathBuf,
@@ -13,6 +13,11 @@ pub struct AppConfig {
     pub scrcpy_server_path: PathBuf,
     pub scrcpy_local_port: u16,
     pub scrcpy_max_size: u32,
+    pub automation_profile_path: Option<PathBuf>,
+    pub automation_dry_run: bool,
+    pub automation_history_path: Option<PathBuf>,
+    pub recognition_template_path: Option<PathBuf>,
+    pub recognition_threshold: f32,
 }
 
 impl Default for AppConfig {
@@ -24,6 +29,11 @@ impl Default for AppConfig {
             scrcpy_server_path: PathBuf::from("third_party/scrcpy/scrcpy-server-v4.1"),
             scrcpy_local_port: 27_183,
             scrcpy_max_size: 1_920,
+            automation_profile_path: None,
+            automation_dry_run: false,
+            automation_history_path: None,
+            recognition_template_path: None,
+            recognition_threshold: 0.9,
         }
     }
 }
@@ -68,6 +78,11 @@ impl AppConfig {
         if self.scrcpy_local_port == 0 {
             return Err(ConfigError::Invalid(
                 "scrcpy_local_port must not be zero".to_owned(),
+            ));
+        }
+        if !(0.0..=1.0).contains(&self.recognition_threshold) {
+            return Err(ConfigError::Invalid(
+                "recognition_threshold must be within 0.0..=1.0".to_owned(),
             ));
         }
         Ok(())
@@ -122,6 +137,11 @@ mod tests {
 
         assert_eq!(config.adb_path, PathBuf::from("/opt/android/adb"));
         assert_eq!(config.ffmpeg_path, PathBuf::from("ffmpeg"));
+        assert_eq!(config.automation_profile_path, None);
+        assert!(!config.automation_dry_run);
+        assert_eq!(config.automation_history_path, None);
+        assert_eq!(config.recognition_template_path, None);
+        assert_eq!(config.recognition_threshold, 0.9);
         assert_eq!(config.device_refresh_interval_ms, 1_500);
         assert_eq!(
             config.scrcpy_server_path,
@@ -139,5 +159,28 @@ mod tests {
     fn rejects_an_empty_ffmpeg_path() {
         let result = AppConfig::from_toml("ffmpeg_path = \"\"");
         assert!(matches!(result, Err(ConfigError::Invalid(_))));
+    }
+
+    #[test]
+    fn rejects_an_invalid_recognition_threshold() {
+        let result = AppConfig::from_toml("recognition_threshold = 1.1");
+        assert!(matches!(result, Err(ConfigError::Invalid(_))));
+    }
+
+    #[test]
+    fn parses_automation_dry_run() {
+        let config = AppConfig::from_toml("automation_dry_run = true").unwrap();
+        assert!(config.automation_dry_run);
+    }
+
+    #[test]
+    fn parses_automation_history_path() {
+        let config =
+            AppConfig::from_toml("automation_history_path = \"history/run.jsonl\"").unwrap();
+
+        assert_eq!(
+            config.automation_history_path,
+            Some(PathBuf::from("history/run.jsonl"))
+        );
     }
 }

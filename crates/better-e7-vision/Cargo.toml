@@ -1,0 +1,15 @@
+[package]
+name = "better-e7-vision"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+better-e7-core = { path = "../better-e7-core" }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+
+[lints]
+workspace = true

@@ -22,16 +22,17 @@ flowchart TD
 |---|---|---|
 | better-e7-core | Frame / 座標 / ポート / 共通エラー | Rust標準ライブラリ |
 | better-e7-config | TOML設定の読み書きと検証 | serde / toml |
+| better-e7-automation | 汎用profile / Condition / Action / Rule engine | core / serde / toml |
 | better-e7-adb | ADB process / 端末一覧 / 入力 | core / Rust標準ライブラリ |
-| better-e7-runtime | Worker / command / event / 最新Frame / 入力queue | config / core / adb / video / Tokio |
+| better-e7-runtime | Worker / command / event / 最新Frame / 入力queue / 認識worker / Rule実行 | config / core / automation / adb / video / vision / Tokio |
 | better-e7-android | scrcpy-server起動 / transport / control | core / adb / Tokio |
 | better-e7-video | ストリーム解析 / デコード / 色変換 | core / FFmpeg |
-| better-e7-vision | テンプレート / 色 / OCR / ONNX | core / OpenCV / ort |
-| better-e7-game-api | ゲーム / Trigger / Task向けAPI | core |
+| better-e7-vision | 保存画像source / テンプレート / 将来の色 / OCR / ONNX | core / image / 将来のOpenCV / ort |
+| better-e7-game-api | ゲーム登録 / 状態 / Trigger / Task / Dispatcher | core |
 | better-e7-app | GUI / 構成 / 各処理の起動と停止 | 全公開crate / egui |
 | better-e7-cli | ヘッドレス実行と検証 | GUI以外の公開crate |
 
-現在はcore / config / adb / android / video / runtime / appを実装しています。vision / game-apiは対応する縦切り機能へ着手するときに追加します。
+現在はcore / config / automation / adb / android / video / vision / game-api / runtime / appを実装しています。開発の中心は汎用AutomationProfileとし、具体的なゲームcrateは汎用機能が不足した場合だけ追加します。
 
 ```mermaid
 flowchart TD
@@ -65,7 +66,51 @@ scrcpy sessionを開始すると、専用のblocking workerがvideo socketを読
 
 デコード済みFrameはruntimeのlatest frame slotへ保存します。GUIが取得する前に次のFrameが届いた場合は古いFrameを置き換え、遅延やメモリ増加を防ぎます。eguiはRGB / RGBAをtextureへ変換し、縦横比を維持してpreviewへ表示します。
 
+認識は映像workerと別のblocking workerで実行します。認識待ちのslotは1枚だけで、新しいFrameが届くと未処理の古いFrameを置き換えます。これにより認識が映像受信を止めず、結果が実画面から大きく遅れることも防ぎます。
+
+最初の認識backendはpure RustのRGB template matcherです。正規化されたROI内を粗く探索し、最良候補の周辺を1pixel単位で再探索します。検出結果はlabel / confidence / center / boundsを持ち、egui previewへ正規化矩形として重ねます。OpenCVは複数templateや高度な処理が必要になった時点で、同じ`Recognizer`境界の内側へ追加します。
+
 入力は容量64件の専用queueで順番に処理します。ADB commandは入力workerだけが実行するため、同時に複数の操作を送りません。停止時は新しい入力を拒否して未実行のqueueを破棄し、実行中のcommandが終了してからworkerを閉じます。
+
+## ゲーム自動化
+
+各ゲームは`GamePlugin`を実装し、安定した`GameId`と表示名を`GameRegistry`へ登録します。初期段階ではpluginをcompile時に組み込みます。動的downloadやnative libraryのloadは扱いません。
+
+`Dispatcher`はゲームごとの`GameState` / `Trigger` / `Task`を所有します。各FrameのtickではTriggerをpriorityの高い順に評価し、`Consume`を返したTriggerでそのtickを終了します。これにより復旧用Triggerが通常Taskの更新をそのtickだけ抑止できます。
+
+Taskは開始 / 更新 / 一時停止 / 再開 / 停止 / 完了の状態を持ちます。ゲーム側はADBへ直接入力せず、正規化座標の`InputIntent`を`DispatchReport`として返します。1回のtickで返せる入力は最大1件です。runtimeは次の縦切りでこの入力を既存の入力queueへ渡します。
+
+```mermaid
+flowchart TD
+    Registry[GameRegistry] --> Plugin[GamePlugin]
+    Plugin --> Dispatcher
+    Dispatcher --> Trigger
+    Dispatcher --> Task
+    Trigger --> Report[DispatchReport]
+    Task --> Report
+```
+
+## 汎用AutomationProfile
+
+`better-e7-automation`はゲーム名を含まない宣言型profileを読み込みます。各RuleはCondition / Action / priority / cooldown / consumeを持ちます。Conditionは認識labelの有無を`all` / `any` / `not`で組み合わせられます。Actionは検出中心のtap / 固定座標のtap / swipe / Android key / logを扱います。
+
+Ruleはpriorityの高い順に評価します。cooldown中のRuleと無効なRuleは飛ばします。入力Actionを1件生成した時点でtickを終了するため、同じFrameから複数の入力は生成しません。log Actionは`consume = false`にすると低priorityのRuleを続けて評価できます。
+
+engineへ渡す時間は外部で管理します。単体テストでは任意の経過時間を渡せるため、待機やsleepを使わずcooldownを検証できます。runtimeはsession開始時刻からの単調増加時間を渡し、session開始ごとにcooldown状態をresetします。
+
+profile内の複数templateは`RecognizerSet`へまとめます。認識workerが返した検出一覧をengineへ渡し、生成された入力を手動操作と同じ入力queueへ送ります。templateの相対pathはprofileのdirectoryを基準にするため、profileとassetを一緒に移動できます。GUIはprofile名 / 最後に実行したRule / log Actionをruntime eventとして受け取ります。
+
+profileは停止中に読み直せます。新しいprofileのparse / validation / template読み込みがすべて成功してからrecognizerとengineを交換します。失敗時は実行中の設定を維持します。dry-runではengineまで同じ経路を通し、入力queueの直前で予定入力eventへ変換します。
+
+rule editorはAutomationProfileの型を直接編集し、Template / ROI / Condition / Action / priority / cooldown / consumeをeguiへ表示します。保存処理はruntime workerで参照とassetを先に検証し、成功した場合だけTOMLを書き込みます。保存したprofileは自動では実行設定へ反映せず、利用者が明示的に読み込んだ時点で差し替えます。
+
+録画の回帰確認には動画decoderを毎回動かさず、録画から抽出した画像pathを`ImageSequenceSource`へ渡します。Frame IDと順序を固定できるため、同じmatcher結果を通常CIで再現できます。
+
+オフライン実行では指定directory内のPNG / JPEGを名前順に読み、通常実行と同じprofile読み込み / `RecognizerSet` / `AutomationEngine`へ渡します。入力はAndroidへ送らず、すべて予定入力としてGUIと実行履歴へ返します。処理は専用workerで動かし、GUIから停止できます。
+
+実行履歴は容量を制限した専用channelからhistory workerへ渡し、JSONLへ順番に追記します。自動化のcoordinatorはファイルI/Oを行いません。履歴の書き込みに失敗した場合はworkerを切り離し、映像 / 認識 / 入力は停止しません。
+
+履歴viewerの読み込みもruntime workerで行います。GUIへ渡すrecordは最新10000件までに制限し、profile / Rule / eventの絞り込みは読み込み済みrecordへ適用します。
 
 | 経路 | 方針 |
 |---|---|

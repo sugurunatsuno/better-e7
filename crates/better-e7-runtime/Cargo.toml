@@ -10,10 +10,17 @@ publish = false
 [dependencies]
 better-e7-adb = { path = "../better-e7-adb" }
 better-e7-android = { path = "../better-e7-android" }
+better-e7-automation = { path = "../better-e7-automation" }
 better-e7-config = { path = "../better-e7-config" }
 better-e7-core = { path = "../better-e7-core" }
 better-e7-video = { path = "../better-e7-video" }
+better-e7-vision = { path = "../better-e7-vision" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
+
+[dev-dependencies]
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 [lints]
 workspace = true

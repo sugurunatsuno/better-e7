@@ -46,6 +46,10 @@ better-e7は、Androidゲーム向けの自動化をPCのOSや端末解像度か
 
 ### 自動化
 
+- ゲーム固有コードなしでTOMLからRuleを定義できる
+- 認識labelの有無をConditionとして組み合わせられる
+- tap / swipe / key / logを汎用Actionとして指定できる
+- Ruleにpriority / cooldown / enabled / consumeを指定できる
 - ゲーム状態を推定し、条件に合うTriggerまたはTaskを実行できる
 - タスクの開始 / 停止 / 一時停止ができる
 - 同時に入力する処理を1つに制限できる

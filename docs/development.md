@@ -8,7 +8,7 @@
 - 対応バージョンのscrcpy-server
 - FFmpeg
 
-FFmpegは映像プレビューの実行時に必要です。通常の単体テストは模擬PPM streamを使うため、FFmpegやAndroid端末なしで実行できます。OpenCV / ONNX Runtimeは、それぞれを使うcrateへ着手するときに追加します。
+FFmpegは映像プレビューの実行時に必要です。通常の単体テストは模擬PPM streamと生成画像を使うため、FFmpegやAndroid端末なしで実行できます。OpenCV / ONNX Runtimeは、それぞれが必要になった時点で追加します。
 
 ## 初回確認
 
@@ -25,6 +25,16 @@ ADBがPATHにない場合は`better-e7.toml`の`adb_path`を変更してくだ�
 
 FFmpegがPATHにない場合は`better-e7.toml`の`ffmpeg_path`を変更します。
 
+汎用自動化を試す場合は`automation.example.toml`をコピーし、`automation_profile_path`へ設定します。profile内のtemplate pathはprofileのdirectoryを基準にします。単一templateの認識だけを試す場合は、従来どおり`recognition_template_path`と`recognition_threshold`を使えます。
+
+profileは停止中にGUIのタスク欄から読み直せます。最初はdry-runを有効にすると、認識とRuleの結果を確認しながらAndroidへの自動入力を止められます。手動入力はdry-run中も利用できます。
+
+録画を使う認識回帰では、確認したい場面をPNGまたはJPEGの連番へ抽出し、`ImageSequenceSource`へ順番に渡します。通常CIでは動画codecやAndroid端末を必要としません。
+
+GUIから同じFrame列を実行する場合は、profileを読み込んでからオフライン実行へFrameのdirectoryを指定します。ファイル名でsortされるため、`0001.png`のように連番へそろえると録画順を維持できます。オフライン実行ではAndroid入力を行いません。
+
+実行履歴が必要な場合は`automation_history_path`を設定してアプリを再起動します。JSONLは追記形式なので、1行ずつ処理してRuleの順序やdry-runとの差を確認できます。
+
 ## 実装の進め方
 
 縦切りで動く範囲を増やします。最初の縦切りは次の流れです。
@@ -39,6 +49,10 @@ flowchart LR
 ```
 
 各段階では保存データを使う代替入力を用意し、Android端末がなくてもテストできるようにします。
+
+ゲーム固有crateは`better-e7-game-api`と必要なasset定義だけに依存させます。ADB / scrcpy / FFmpeg / eguiへ直接依存させません。`GamePlugin`がゲームごとの`Dispatcher`を生成し、入力は`DispatchReport`からruntimeへ渡します。
+
+新しい自動化は、まず`AutomationProfile`のConditionとActionで表現できるか確認します。表現できない場合はゲーム固有実装を作る前に、再利用できるCondition / Actionとして`better-e7-automation`へ追加します。
 
 実機では映像接続後にpreviewをclickすると、その位置をADB tapとして送ります。左panelのHome / Back / 上へswipeからキー入力とswipeも確認できます。停止操作の後は入力queueが閉じるため、新しい操作は送信されません。
 

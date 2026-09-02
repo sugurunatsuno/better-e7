@@ -13,6 +13,34 @@ Android端末が必要な確認と、通常の自動テストを分けます。
 - 正規化座標からpixel座標への変換を検証する
 - ADB tap / swipe / keyのargumentをmock runnerで検証する
 - 入力停止時に未実行のqueueが破棄されることを検証する
+- 保存画像を`VideoSource`として1回だけ取得できることを検証する
+- 録画から抽出した画像列を順番どおりFrameとして再生できることを検証する
+- Frame列でtemplateの未検出から検出への変化を再現する
+- 生成したRGB画像からtemplateの位置と正規化矩形を検出する
+- ROI外の一致を検出しないことを検証する
+- 複数のtemplate recognizerが同じFrameの検出結果をまとめることを検証する
+- 認識中に複数Frameが届いた場合、未処理Frameを最新のものへ置き換えることを検証する
+- 複数ゲームを安定したIDで登録し、重複IDを拒否する
+- Triggerをpriority順に評価し、Consume後は低priorityの処理を呼ばない
+- 消費されたtickでは実行中Taskを更新しない
+- Taskの開始 / 一時停止 / 再開 / 完了をmockで検証する
+- 1回のtickで複数の入力が生成された場合はエラーにする
+- AutomationProfileのTOML parse / serialize / validationを検証する
+- Condition / Actionが未定義templateを参照した場合に拒否する
+- profile検証でtemplate assetの欠落を検出する
+- rule editorの保存前に参照とassetを検証し、失敗時は既存profileを上書きしない
+- 汎用Ruleをpriority順に評価する
+- 経過時間を直接渡してcooldownを検証する
+- consumeするlog Ruleが低priorityのRuleを止めることを検証する
+- all / any / notを組み合わせたConditionを検証する
+- tap_detectionが最もconfidenceの高い検出位置を使うことを検証する
+- templateなしのprofileをmock Frameで認識し、Rule engineが入力を生成することを検証する
+- dry-runでは入力queueがなくても予定入力を生成し、InputControllerを呼ばないことを検証する
+- PNG / JPEGを名前順に読み、認識 / Rule engine / 予定入力を実機なしで通すことを検証する
+- オフライン実行でも履歴へRuleと予定入力を順番に保存することを検証する
+- 実行履歴を発生順のJSONLとして保存できることを検証する
+- JSONLのprofile / Rule / event / session経過時間 / 入力内容を検証する
+- 保存したJSONLを履歴viewer用のrecordへ読み戻せることを検証する
 
 このテストはUbuntu CIで実行し、ADB / scrcpy-server / FFmpegを必要としません。
 
@@ -30,3 +58,5 @@ Android端末が必要な確認と、通常の自動テストを分けます。
 - 停止後にADB forwardが削除される
 - 停止後に入力が送信されない
 - USBを抜いた場合にsessionが停止する
+- `recognition_template_path`を指定すると一致箇所にlabel / confidence / 矩形が表示される
+- `automation_profile_path`を指定すると複数templateの認識 / Rule実行 / 入力がつながる

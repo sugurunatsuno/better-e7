@@ -9,6 +9,7 @@ publish = false
 
 [dependencies]
 better-e7-adb = { path = "../better-e7-adb" }
+better-e7-automation = { path = "../better-e7-automation" }
 better-e7-config = { path = "../better-e7-config" }
 better-e7-core = { path = "../better-e7-core" }
 better-e7-runtime = { path = "../better-e7-runtime" }

@@ -1,4 +1,6 @@
 mod app;
+mod history_viewer;
+mod profile_editor;
 
 use std::path::PathBuf;
 
