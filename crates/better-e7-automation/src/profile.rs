@@ -282,10 +282,7 @@ impl Action {
     fn validate_references(&self, template_ids: &BTreeSet<&str>) -> Result<(), ProfileError> {
         match self {
             Self::TapDetection { label } => validate_template_reference(label, template_ids),
-            Self::Tap { .. }
-            | Self::Swipe { .. }
-            | Self::Key { .. }
-            | Self::Log { .. } => Ok(()),
+            Self::Tap { .. } | Self::Swipe { .. } | Self::Key { .. } | Self::Log { .. } => Ok(()),
         }
     }
 }
