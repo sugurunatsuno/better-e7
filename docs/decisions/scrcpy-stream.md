@@ -8,7 +8,7 @@ scrcpyウィンドウをOS機能で再キャプチャすると、macOS / Windows
 
 ## 判断
 
-アプリが対応版のscrcpy-serverを起動し、映像socketからH.264を直接受信します。デコード後のAndroid画面を唯一のFrame座標系として扱います。
+アプリがscrcpy-server v4.1を起動し、映像socketからH.264を直接受信します。最初は`raw_stream=true` / `audio=false` / `control=false`を使い、入力はADBへ分離します。デコード後のAndroid画面を唯一のFrame座標系として扱います。
 
 ## 影響
 
@@ -16,8 +16,8 @@ scrcpyウィンドウをOS機能で再キャプチャすると、macOS / Windows
 - scrcpyの内部プロトコル変更へ追従する必要がある
 - clientとserverを同じ対応バージョンへ固定する
 - serverの配布条件とライセンス対応が必要になる
+- server assetのSHA-256を固定し、repositoryへbinaryはcommitしない
 
 ## 代替
 
 初期検証で直接接続の保守コストが大きすぎる場合は、scrcpyの録画出力または別processからの標準出力を受けるadapterを検討します。上位層はVideoSourceを使うため、方式を変更しても影響を局所化できます。
-

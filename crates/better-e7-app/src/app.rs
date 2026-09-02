@@ -2,7 +2,9 @@ use std::time::Duration;
 
 use better_e7_adb::AdbDevice;
 use better_e7_config::AppConfig;
-use better_e7_runtime::{AppRuntime, AutomationState, RuntimeCommand, RuntimeEvent};
+use better_e7_runtime::{
+    AppRuntime, AutomationState, ConnectionState, RuntimeCommand, RuntimeEvent,
+};
 use eframe::egui;
 use tracing::{error, info};
 
@@ -13,6 +15,8 @@ pub struct BetterE7App {
     devices: Vec<AdbDevice>,
     selected_device: Option<String>,
     automation_state: AutomationState,
+    connection_state: ConnectionState,
+    video_bytes_received: u64,
     logs: Vec<String>,
 }
 
@@ -23,6 +27,8 @@ impl BetterE7App {
             devices: Vec::new(),
             selected_device: None,
             automation_state: AutomationState::Stopped,
+            connection_state: ConnectionState::Disconnected,
+            video_bytes_received: 0,
             logs: vec!["better-e7を起動しました".to_owned()],
         };
 
@@ -70,6 +76,21 @@ impl BetterE7App {
                         AutomationState::Running => "自動化を開始しました",
                     });
                 }
+                RuntimeEvent::ConnectionStateChanged(state) => {
+                    self.connection_state = state;
+                    if state == ConnectionState::Connecting {
+                        self.video_bytes_received = 0;
+                    }
+                    self.push_log(match state {
+                        ConnectionState::Disconnected => "映像接続を終了しました",
+                        ConnectionState::Connecting => "映像接続を開始しています",
+                        ConnectionState::Connected => "映像socketへ接続しました",
+                        ConnectionState::Disconnecting => "映像接続を終了しています",
+                    });
+                }
+                RuntimeEvent::VideoBytesReceived(total_bytes) => {
+                    self.video_bytes_received = total_bytes;
+                }
                 RuntimeEvent::Error(message) => {
                     error!(%message, "runtime error");
                     self.push_log(format!("エラー: {message}"));
@@ -112,19 +133,24 @@ impl BetterE7App {
                 });
 
                 let can_toggle = self.runtime.is_some()
-                    && (self.automation_state == AutomationState::Running
-                        || self.selected_device.is_some());
-                let label = match self.automation_state {
-                    AutomationState::Stopped => "開始",
-                    AutomationState::Running => "停止",
+                    && match self.connection_state {
+                        ConnectionState::Disconnected => self.selected_device.is_some(),
+                        ConnectionState::Connected => true,
+                        ConnectionState::Connecting | ConnectionState::Disconnecting => false,
+                    };
+                let label = match self.connection_state {
+                    ConnectionState::Disconnected => "開始",
+                    ConnectionState::Connected => "停止",
+                    ConnectionState::Connecting | ConnectionState::Disconnecting => "処理中",
                 };
                 if ui
                     .add_enabled(can_toggle, egui::Button::new(label))
                     .clicked()
                 {
-                    let command = match self.automation_state {
-                        AutomationState::Stopped => RuntimeCommand::StartAutomation,
-                        AutomationState::Running => RuntimeCommand::StopAutomation,
+                    let command = match self.connection_state {
+                        ConnectionState::Disconnected => RuntimeCommand::StartAutomation,
+                        ConnectionState::Connected => RuntimeCommand::StopAutomation,
+                        ConnectionState::Connecting | ConnectionState::Disconnecting => return,
                     };
                     self.send(command);
                 }
@@ -162,7 +188,8 @@ impl BetterE7App {
                     );
                     if ui
                         .add_enabled(
-                            device.is_ready() && self.automation_state == AutomationState::Stopped,
+                            device.is_ready()
+                                && self.connection_state == ConnectionState::Disconnected,
                             egui::Button::selectable(is_selected, label),
                         )
                         .clicked()
@@ -191,10 +218,16 @@ impl BetterE7App {
             );
             ui.painter()
                 .rect_filled(rect, 6.0, egui::Color32::from_gray(24));
+            let preview_message = match self.connection_state {
+                ConnectionState::Disconnected => "Android映像は未接続です",
+                ConnectionState::Connecting => "Android映像へ接続しています",
+                ConnectionState::Connected => "H.264 streamを受信しています",
+                ConnectionState::Disconnecting => "Android映像を切断しています",
+            };
             ui.painter().text(
                 rect.center(),
                 egui::Align2::CENTER_CENTER,
-                "Android映像は未接続です",
+                preview_message,
                 egui::FontId::proportional(22.0),
                 egui::Color32::GRAY,
             );
@@ -205,6 +238,7 @@ impl BetterE7App {
                 self.selected_device.as_deref().unwrap_or("未選択")
             ));
             ui.label("認識FPS: --");
+            ui.label(format!("受信量: {} bytes", self.video_bytes_received));
             ui.label("ゲーム状態: Unknown");
         });
     }

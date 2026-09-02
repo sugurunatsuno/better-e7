@@ -20,6 +20,8 @@ cargo run -p better-e7-app
 
 ADBがPATHにない場合は`better-e7.toml`の`adb_path`を変更してください。書式は [configuration.md](configuration.md) にあります。
 
+実機で映像接続を確認するときは、`third_party/scrcpy/README.md`に記載したscrcpy-server v4.1を配置します。通常の単体テストではserver binaryもAndroid端末も不要です。
+
 ## 実装の進め方
 
 縦切りで動く範囲を増やします。最初の縦切りは次の流れです。

@@ -1,5 +1,5 @@
 [package]
-name = "better-e7-runtime"
+name = "better-e7-android"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,10 +8,8 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
-better-e7-adb = { path = "../better-e7-adb" }
-better-e7-android = { path = "../better-e7-android" }
 better-e7-config = { path = "../better-e7-config" }
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
 
 [lints]
 workspace = true
+

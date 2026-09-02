@@ -1,10 +1,12 @@
 [workspace]
 members = [
     "crates/better-e7-adb",
+    "crates/better-e7-android",
     "crates/better-e7-app",
     "crates/better-e7-config",
     "crates/better-e7-core",
     "crates/better-e7-runtime",
+    "crates/better-e7-video",
 ]
 resolver = "2"
 

@@ -31,9 +31,11 @@ FFmpeg / OpenCV / ONNX Runtimeは必要になるまでworkspaceへ追加しま�
 ```text
 crates/
   better-e7-adb/   ADB実行と端末情報の解析
+  better-e7-android/ scrcpy-serverと映像socket
   better-e7-core/  OSやGUIに依存しない型とtrait
   better-e7-config/ TOML設定
   better-e7-runtime/ Workerと状態管理
+  better-e7-video/ H.264 Annex B parser
   better-e7-app/   eguiデスクトップアプリ
 docs/
   decisions/       技術判断の記録

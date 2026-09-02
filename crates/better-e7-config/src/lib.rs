@@ -9,6 +9,9 @@ const MINIMUM_REFRESH_INTERVAL_MS: u64 = 250;
 pub struct AppConfig {
     pub adb_path: PathBuf,
     pub device_refresh_interval_ms: u64,
+    pub scrcpy_server_path: PathBuf,
+    pub scrcpy_local_port: u16,
+    pub scrcpy_max_size: u32,
 }
 
 impl Default for AppConfig {
@@ -16,6 +19,11 @@ impl Default for AppConfig {
         Self {
             adb_path: PathBuf::from("adb"),
             device_refresh_interval_ms: 2_000,
+            scrcpy_server_path: PathBuf::from(
+                "third_party/scrcpy/scrcpy-server-v4.1",
+            ),
+            scrcpy_local_port: 27_183,
+            scrcpy_max_size: 1_920,
         }
     }
 }
@@ -51,6 +59,11 @@ impl AppConfig {
             return Err(ConfigError::Invalid(format!(
                 "device_refresh_interval_ms must be at least {MINIMUM_REFRESH_INTERVAL_MS}"
             )));
+        }
+        if self.scrcpy_local_port == 0 {
+            return Err(ConfigError::Invalid(
+                "scrcpy_local_port must not be zero".to_owned(),
+            ));
         }
         Ok(())
     }
@@ -104,6 +117,10 @@ mod tests {
 
         assert_eq!(config.adb_path, PathBuf::from("/opt/android/adb"));
         assert_eq!(config.device_refresh_interval_ms, 1_500);
+        assert_eq!(
+            config.scrcpy_server_path,
+            PathBuf::from("third_party/scrcpy/scrcpy-server-v4.1")
+        );
     }
 
     #[test]

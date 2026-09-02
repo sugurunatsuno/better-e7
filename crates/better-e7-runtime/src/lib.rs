@@ -1,12 +1,25 @@
-use std::{error::Error, fmt, sync::Arc, time::Duration};
+use std::{
+    error::Error,
+    fmt,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 
 use better_e7_adb::{AdbClient, AdbDevice, DeviceLister};
+use better_e7_android::{
+    ActiveVideoSession, ScrcpySessionFactory, VideoSessionFactory,
+};
 use better_e7_config::AppConfig;
 use tokio::{
     runtime::{Builder, Runtime},
     sync::mpsc,
     time::MissedTickBehavior,
 };
+
+const VIDEO_BUFFER_SIZE: usize = 64 * 1_024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuntimeCommand {
@@ -23,11 +36,21 @@ pub enum AutomationState {
     Running,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConnectionState {
+    Disconnected,
+    Connecting,
+    Connected,
+    Disconnecting,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuntimeEvent {
     DevicesUpdated(Vec<AdbDevice>),
     SelectedDeviceChanged(Option<String>),
     AutomationStateChanged(AutomationState),
+    ConnectionStateChanged(ConnectionState),
+    VideoBytesReceived(u64),
     Error(String),
 }
 
@@ -47,10 +70,13 @@ impl AppRuntime {
         let (command_tx, command_rx) = mpsc::unbounded_channel();
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         let lister: Arc<dyn DeviceLister> = Arc::new(AdbClient::new(config.adb_path.clone()));
+        let session_factory: Arc<dyn VideoSessionFactory> =
+            Arc::new(ScrcpySessionFactory::new(config));
         let refresh_interval = Duration::from_millis(config.device_refresh_interval_ms);
 
         let _coordinator = runtime.spawn(run_coordinator(
             lister,
+            session_factory,
             refresh_interval,
             command_rx,
             event_tx,
@@ -82,15 +108,19 @@ impl Drop for AppRuntime {
 
 async fn run_coordinator(
     lister: Arc<dyn DeviceLister>,
+    session_factory: Arc<dyn VideoSessionFactory>,
     refresh_interval: Duration,
     mut command_rx: mpsc::UnboundedReceiver<RuntimeCommand>,
     event_tx: mpsc::UnboundedSender<RuntimeEvent>,
 ) {
     let mut interval = tokio::time::interval(refresh_interval);
     interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    let (worker_event_tx, mut worker_event_rx) = mpsc::unbounded_channel();
     let mut devices = Vec::new();
     let mut selected_device: Option<String> = None;
     let mut automation_state = AutomationState::Stopped;
+    let mut connection_state = ConnectionState::Disconnected;
+    let mut video_worker_stop: Option<Arc<AtomicBool>> = None;
 
     loop {
         tokio::select! {
@@ -101,10 +131,38 @@ async fn run_coordinator(
                     &mut devices,
                     &mut selected_device,
                     &mut automation_state,
+                    &mut connection_state,
+                    video_worker_stop.as_ref(),
                 ).await;
+            }
+            worker_event = worker_event_rx.recv() => {
+                if let Some(worker_event) = worker_event {
+                    match worker_event {
+                        VideoWorkerEvent::Progress(total_bytes) => {
+                            send_event(&event_tx, RuntimeEvent::VideoBytesReceived(total_bytes));
+                        }
+                        VideoWorkerEvent::Ended(result) => {
+                            video_worker_stop = None;
+                            automation_state = AutomationState::Stopped;
+                            connection_state = ConnectionState::Disconnected;
+                            send_event(
+                                &event_tx,
+                                RuntimeEvent::AutomationStateChanged(automation_state),
+                            );
+                            send_event(
+                                &event_tx,
+                                RuntimeEvent::ConnectionStateChanged(connection_state),
+                            );
+                            if let Err(message) = result {
+                                send_event(&event_tx, RuntimeEvent::Error(message));
+                            }
+                        }
+                    }
+                }
             }
             command = command_rx.recv() => {
                 let Some(command) = command else {
+                    request_video_stop(video_worker_stop.as_ref());
                     break;
                 };
                 match command {
@@ -115,12 +173,14 @@ async fn run_coordinator(
                             &mut devices,
                             &mut selected_device,
                             &mut automation_state,
+                            &mut connection_state,
+                            video_worker_stop.as_ref(),
                         ).await;
                     }
                     RuntimeCommand::SelectDevice(serial) => {
-                        if automation_state == AutomationState::Running {
+                        if connection_state != ConnectionState::Disconnected {
                             send_event(&event_tx, RuntimeEvent::Error(
-                                "stop automation before changing the device".to_owned(),
+                                "stop the video session before changing the device".to_owned(),
                             ));
                         } else if devices.iter().any(|device| device.serial == serial && device.is_ready()) {
                             selected_device = Some(serial);
@@ -135,29 +195,83 @@ async fn run_coordinator(
                         }
                     }
                     RuntimeCommand::StartAutomation => {
-                        let ready = selected_device.as_ref().is_some_and(|serial| {
-                            devices.iter().any(|device| &device.serial == serial && device.is_ready())
-                        });
-                        if ready {
-                            automation_state = AutomationState::Running;
-                            send_event(
-                                &event_tx,
-                                RuntimeEvent::AutomationStateChanged(automation_state),
-                            );
-                        } else {
+                        if connection_state != ConnectionState::Disconnected {
+                            send_event(&event_tx, RuntimeEvent::Error(
+                                "a video session is already active".to_owned(),
+                            ));
+                            continue;
+                        }
+                        let serial = selected_device.as_ref().filter(|serial| {
+                            devices.iter().any(|device| &device.serial == *serial && device.is_ready())
+                        }).cloned();
+                        let Some(serial) = serial else {
                             send_event(&event_tx, RuntimeEvent::Error(
                                 "select a ready device before starting automation".to_owned(),
                             ));
+                            continue;
+                        };
+
+                        connection_state = ConnectionState::Connecting;
+                        send_event(
+                            &event_tx,
+                            RuntimeEvent::ConnectionStateChanged(connection_state),
+                        );
+                        let factory = Arc::clone(&session_factory);
+                        match tokio::task::spawn_blocking(move || factory.start(&serial)).await {
+                            Ok(Ok(session)) => {
+                                let stop = Arc::new(AtomicBool::new(false));
+                                spawn_video_worker(
+                                    session,
+                                    Arc::clone(&stop),
+                                    worker_event_tx.clone(),
+                                );
+                                video_worker_stop = Some(stop);
+                                automation_state = AutomationState::Running;
+                                connection_state = ConnectionState::Connected;
+                                send_event(
+                                    &event_tx,
+                                    RuntimeEvent::AutomationStateChanged(automation_state),
+                                );
+                                send_event(
+                                    &event_tx,
+                                    RuntimeEvent::ConnectionStateChanged(connection_state),
+                                );
+                            }
+                            Ok(Err(error)) => {
+                                connection_state = ConnectionState::Disconnected;
+                                send_event(
+                                    &event_tx,
+                                    RuntimeEvent::ConnectionStateChanged(connection_state),
+                                );
+                                send_event(&event_tx, RuntimeEvent::Error(error.to_string()));
+                            }
+                            Err(error) => {
+                                connection_state = ConnectionState::Disconnected;
+                                send_event(
+                                    &event_tx,
+                                    RuntimeEvent::ConnectionStateChanged(connection_state),
+                                );
+                                send_event(
+                                    &event_tx,
+                                    RuntimeEvent::Error(format!("session worker failed: {error}")),
+                                );
+                            }
                         }
                     }
                     RuntimeCommand::StopAutomation => {
-                        automation_state = AutomationState::Stopped;
-                        send_event(
-                            &event_tx,
-                            RuntimeEvent::AutomationStateChanged(automation_state),
-                        );
+                        if video_worker_stop.is_some() {
+                            connection_state = ConnectionState::Disconnecting;
+                            send_event(
+                                &event_tx,
+                                RuntimeEvent::ConnectionStateChanged(connection_state),
+                            );
+                            request_video_stop(video_worker_stop.as_ref());
+                        }
                     }
-                    RuntimeCommand::Shutdown => break,
+                    RuntimeCommand::Shutdown => {
+                        request_video_stop(video_worker_stop.as_ref());
+                        break;
+                    }
                 }
             }
         }
@@ -170,6 +284,8 @@ async fn refresh_devices(
     devices: &mut Vec<AdbDevice>,
     selected_device: &mut Option<String>,
     automation_state: &mut AutomationState,
+    connection_state: &mut ConnectionState,
+    video_worker_stop: Option<&Arc<AtomicBool>>,
 ) {
     let result = tokio::task::spawn_blocking(move || lister.list_devices()).await;
     match result {
@@ -181,11 +297,17 @@ async fn refresh_devices(
             });
             if !selected_is_ready && selected_device.take().is_some() {
                 send_event(event_tx, RuntimeEvent::SelectedDeviceChanged(None));
+                request_video_stop(video_worker_stop);
                 if *automation_state == AutomationState::Running {
                     *automation_state = AutomationState::Stopped;
+                    *connection_state = ConnectionState::Disconnecting;
                     send_event(
                         event_tx,
                         RuntimeEvent::AutomationStateChanged(*automation_state),
+                    );
+                    send_event(
+                        event_tx,
+                        RuntimeEvent::ConnectionStateChanged(*connection_state),
                     );
                 }
             }
@@ -200,8 +322,47 @@ async fn refresh_devices(
     }
 }
 
+fn spawn_video_worker(
+    mut session: Box<dyn ActiveVideoSession>,
+    stop: Arc<AtomicBool>,
+    worker_event_tx: mpsc::UnboundedSender<VideoWorkerEvent>,
+) {
+    let _worker = tokio::task::spawn_blocking(move || {
+        let mut buffer = vec![0_u8; VIDEO_BUFFER_SIZE];
+        let mut total_bytes = 0_u64;
+        let result = loop {
+            if stop.load(Ordering::Acquire) {
+                break Ok(());
+            }
+            match session.read_video(&mut buffer) {
+                Ok(0) => break Ok(()),
+                Ok(bytes_read) => {
+                    total_bytes = total_bytes.saturating_add(bytes_read as u64);
+                    let _ = worker_event_tx.send(VideoWorkerEvent::Progress(total_bytes));
+                }
+                Err(error) if error.is_retryable() => {}
+                Err(error) => break Err(error.to_string()),
+            }
+        };
+
+        let result = result.and_then(|()| session.stop().map_err(|error| error.to_string()));
+        let _ = worker_event_tx.send(VideoWorkerEvent::Ended(result));
+    });
+}
+
+fn request_video_stop(stop: Option<&Arc<AtomicBool>>) {
+    if let Some(stop) = stop {
+        stop.store(true, Ordering::Release);
+    }
+}
+
 fn send_event(event_tx: &mpsc::UnboundedSender<RuntimeEvent>, event: RuntimeEvent) {
     let _ = event_tx.send(event);
+}
+
+enum VideoWorkerEvent {
+    Progress(u64),
+    Ended(Result<(), String>),
 }
 
 #[derive(Debug)]

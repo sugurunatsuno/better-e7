@@ -31,7 +31,7 @@ flowchart TD
 | better-e7-app | GUI / 構成 / 各処理の起動と停止 | 全公開crate / egui |
 | better-e7-cli | ヘッドレス実行と検証 | GUI以外の公開crate |
 
-現在はcore / config / androidのADB部分 / runtime / appを実装しています。video / vision / game-apiは対応する縦切り機能へ着手するときに追加します。
+現在はcore / config / adb / android / video / runtime / appを実装しています。vision / game-apiは対応する縦切り機能へ着手するときに追加します。
 
 ```mermaid
 flowchart TD
@@ -58,6 +58,8 @@ flowchart TD
 GUIスレッドではブロッキング処理を行いません。Tokio runtimeで端末監視 / 映像受信 / デコード / 自動化を動かし、境界では容量を制限したchannelを使います。
 
 現在のruntimeはeguiからcommandを受け、ADB端末一覧 / 選択端末 / 自動化状態をeventとして返します。ADB processは`spawn_blocking`で実行するためGUIスレッドを止めません。
+
+scrcpy sessionを開始すると、専用のblocking workerがvideo socketを読み続けます。停止flagは500msごとに確認でき、終了時はsocket / server process / ADB forwardの順に片付けます。受信量だけをGUIへ通知し、H.264の内容は次のdecoder実装へ渡せる状態にします。
 
 | 経路 | 方針 |
 |---|---|

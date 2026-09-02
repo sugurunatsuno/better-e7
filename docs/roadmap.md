@@ -12,9 +12,9 @@
 ## Android映像
 
 - [x] ADB端末の列挙と選択を作る
-- [ ] scrcpy-serverのバージョンと配布方法を決める
-- [ ] serverの転送 / 起動 / 停止を作る
-- [ ] video socketを受信する
+- [x] scrcpy-serverのバージョンと配布方法を決める
+- [x] serverの転送 / 起動 / 停止を作る
+- [x] video socketを受信する
 - [ ] H.264をFFmpegでデコードする
 - [ ] 最新フレームをeguiへ表示する
 
