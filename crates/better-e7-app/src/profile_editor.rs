@@ -50,11 +50,7 @@ impl ProfileEditor {
         self.status = format!("{name}を保存しました");
     }
 
-    pub fn show(
-        &mut self,
-        context: &egui::Context,
-        enabled: bool,
-    ) -> Option<ProfileEditorCommand> {
+    pub fn show(&mut self, context: &egui::Context, enabled: bool) -> Option<ProfileEditorCommand> {
         if !self.open {
             return None;
         }
@@ -78,22 +74,15 @@ impl ProfileEditor {
                         )
                         .clicked()
                     {
-                        command = Some(ProfileEditorCommand::Load(PathBuf::from(
-                            self.path.trim(),
-                        )));
+                        command = Some(ProfileEditorCommand::Load(PathBuf::from(self.path.trim())));
                     }
-                    if ui
-                        .add_enabled(enabled, egui::Button::new("新規"))
-                        .clicked()
-                    {
+                    if ui.add_enabled(enabled, egui::Button::new("新規")).clicked() {
                         self.profile = Some(empty_profile());
                         self.status = "新しいprofileを編集中です".to_owned();
                     }
                     if ui
                         .add_enabled(
-                            enabled
-                                && self.profile.is_some()
-                                && !self.path.trim().is_empty(),
+                            enabled && self.profile.is_some() && !self.path.trim().is_empty(),
                             egui::Button::new("検証して保存"),
                         )
                         .clicked()
@@ -155,8 +144,7 @@ fn show_profile(ui: &mut egui::Ui, profile: &mut AutomationProfile, enabled: boo
                     });
                     ui.add_enabled(
                         enabled,
-                        egui::Slider::new(&mut template.threshold, 0.0..=1.0)
-                            .text("threshold"),
+                        egui::Slider::new(&mut template.threshold, 0.0..=1.0).text("threshold"),
                     );
                     show_region(ui, &mut template.region, enabled);
                     if ui
@@ -245,12 +233,7 @@ fn coordinate(ui: &mut egui::Ui, label: &str, value: &mut f32, enabled: bool) {
     );
 }
 
-fn show_rule(
-    ui: &mut egui::Ui,
-    rule: &mut AutomationRule,
-    template_ids: &[String],
-    enabled: bool,
-) {
+fn show_rule(ui: &mut egui::Ui, rule: &mut AutomationRule, template_ids: &[String], enabled: bool) {
     ui.horizontal(|ui| {
         ui.label("ID");
         ui.add_enabled(enabled, egui::TextEdit::singleline(&mut rule.id));
@@ -323,8 +306,7 @@ fn show_condition(
             show_label(ui, label, template_ids, enabled);
             ui.add_enabled(
                 enabled,
-                egui::Slider::new(minimum_confidence, 0.0..=1.0)
-                    .text("minimum confidence"),
+                egui::Slider::new(minimum_confidence, 0.0..=1.0).text("minimum confidence"),
             );
         }
         Condition::All { conditions } | Condition::Any { conditions } => {
@@ -415,12 +397,7 @@ enum ActionKind {
     Log,
 }
 
-fn show_action(
-    ui: &mut egui::Ui,
-    action: &mut Action,
-    template_ids: &[String],
-    enabled: bool,
-) {
+fn show_action(ui: &mut egui::Ui, action: &mut Action, template_ids: &[String], enabled: bool) {
     let current = action_kind(action);
     let mut selected = current;
     ui.add_enabled_ui(enabled, |ui| {
@@ -476,7 +453,10 @@ fn show_action(
             });
         }
         Action::Log { message } => {
-            ui.add_enabled(enabled, egui::TextEdit::singleline(message).hint_text("message"));
+            ui.add_enabled(
+                enabled,
+                egui::TextEdit::singleline(message).hint_text("message"),
+            );
         }
     }
 }
