@@ -1,9 +1,4 @@
-use std::{
-    collections::BTreeSet,
-    error::Error,
-    fmt, fs, io,
-    path::Path,
-};
+use std::{collections::BTreeSet, error::Error, fmt, fs, io, path::Path};
 
 use serde::{Deserialize, Serialize};
 
@@ -198,9 +193,9 @@ impl Action {
 
 fn validate_id(value: &str) -> Result<(), ProfileError> {
     if value.is_empty()
-        || !value
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"-_.".contains(&byte))
+        || !value.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"-_.".contains(&byte)
+        })
     {
         return Err(ProfileError::Invalid(format!(
             "rule id must use lowercase ASCII letters, digits, '-', '_' or '.': {value}"
@@ -269,15 +264,14 @@ impl Error for ProfileError {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn parses_the_example_profile() {
-        let profile = AutomationProfile::from_toml(include_str!("../../../automation.example.toml"))
-            .unwrap();
+        let profile =
+            AutomationProfile::from_toml(include_str!("../../../automation.example.toml")).unwrap();
 
         assert_eq!(profile.name, "confirm-and-recover");
         assert_eq!(profile.rules.len(), 2);

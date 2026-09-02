@@ -152,9 +152,7 @@ fn best_detection<'a>(
 ) -> Option<&'a Detection> {
     detections
         .iter()
-        .filter(|detection| {
-            detection.label == label && detection.confidence >= minimum_confidence
-        })
+        .filter(|detection| detection.label == label && detection.confidence >= minimum_confidence)
         .max_by(|left, right| left.confidence.total_cmp(&right.confidence))
 }
 
@@ -178,14 +176,8 @@ pub struct AutomationReport {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EngineError {
-    TargetNotDetected {
-        rule_id: String,
-        label: String,
-    },
-    InvalidAction {
-        rule_id: String,
-        message: String,
-    },
+    TargetNotDetected { rule_id: String, label: String },
+    InvalidAction { rule_id: String, message: String },
 }
 
 impl fmt::Display for EngineError {
@@ -225,7 +217,10 @@ mod tests {
             },
         )]))
         .unwrap();
-        let detections = [detection("confirm", 0.91, 0.2), detection("confirm", 0.98, 0.8)];
+        let detections = [
+            detection("confirm", 0.91, 0.2),
+            detection("confirm", 0.98, 0.8),
+        ];
 
         let report = engine.tick(&detections, Duration::ZERO).unwrap();
 
