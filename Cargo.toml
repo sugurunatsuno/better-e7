@@ -1,0 +1,19 @@
+[workspace]
+members = [
+    "crates/better-e7-app",
+    "crates/better-e7-core",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "UNLICENSED"
+repository = "https://github.com/sugurunatsuno/better-e7"
+rust-version = "1.85"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = "warn"
