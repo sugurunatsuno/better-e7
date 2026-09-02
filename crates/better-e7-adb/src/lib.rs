@@ -303,14 +303,33 @@ mod tests {
             .unwrap();
 
         let calls = runner.calls.lock().unwrap();
-        assert_eq!(calls[0], ("device-1".to_owned(), vec!["tap", "120", "340"]));
+        assert_eq!(
+            calls[0],
+            (
+                "device-1".to_owned(),
+                vec!["tap".to_owned(), "120".to_owned(), "340".to_owned()]
+            )
+        );
         assert_eq!(
             calls[1],
             (
                 "device-1".to_owned(),
-                vec!["swipe", "10", "20", "30", "40", "250"]
+                vec![
+                    "swipe".to_owned(),
+                    "10".to_owned(),
+                    "20".to_owned(),
+                    "30".to_owned(),
+                    "40".to_owned(),
+                    "250".to_owned()
+                ]
             )
         );
-        assert_eq!(calls[2], ("device-1".to_owned(), vec!["keyevent", "4"]));
+        assert_eq!(
+            calls[2],
+            (
+                "device-1".to_owned(),
+                vec!["keyevent".to_owned(), "4".to_owned()]
+            )
+        );
     }
 }
