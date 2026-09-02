@@ -383,7 +383,9 @@ fn run_offline_automation_with_stop(
         .history_path
         .map(|path| AutomationHistoryWriter::spawn(path, history_event_tx))
         .transpose()
-        .map_err(|error| RuntimeError::Offline(format!("failed to start history writer: {error}")))?;
+        .map_err(|error| {
+            RuntimeError::Offline(format!("failed to start history writer: {error}"))
+        })?;
     let mut source = ImageSequenceSource::new(frame_paths.iter().cloned());
     source
         .start()
@@ -410,12 +412,9 @@ fn run_offline_automation_with_stop(
             else {
                 break;
             };
-            let elapsed = options.frame_interval.saturating_mul(
-                report
-                    .processed_frames
-                    .try_into()
-                    .unwrap_or(u32::MAX),
-            );
+            let elapsed = options
+                .frame_interval
+                .saturating_mul(report.processed_frames.try_into().unwrap_or(u32::MAX));
             let detections = recognizer
                 .recognize(&frame)
                 .map_err(|error| RuntimeError::Offline(error.to_string()))?;
@@ -485,9 +484,9 @@ fn submit_offline_history(
     record: AutomationHistoryRecord,
 ) -> Result<(), RuntimeError> {
     if let Some(writer) = writer {
-        writer
-            .submit(record)
-            .map_err(|message| RuntimeError::Offline(format!("failed to save history: {message}")))?;
+        writer.submit(record).map_err(|message| {
+            RuntimeError::Offline(format!("failed to save history: {message}"))
+        })?;
     }
     Ok(())
 }

@@ -432,8 +432,7 @@ impl BetterE7App {
                     && !self.offline_automation_running
                     && !self.automation_profile_path.trim().is_empty()
                     && !self.offline_frames_directory.trim().is_empty();
-                let offline_button_enabled =
-                    can_start_offline || self.offline_automation_running;
+                let offline_button_enabled = can_start_offline || self.offline_automation_running;
                 let offline_button_label = if self.offline_automation_running {
                     "停止"
                 } else {
@@ -451,9 +450,7 @@ impl BetterE7App {
                     } else {
                         RuntimeCommand::StartOfflineAutomation {
                             profile_path: PathBuf::from(self.automation_profile_path.trim()),
-                            frames_directory: PathBuf::from(
-                                self.offline_frames_directory.trim(),
-                            ),
+                            frames_directory: PathBuf::from(self.offline_frames_directory.trim()),
                             history_path: self.config.automation_history_path.clone(),
                         }
                     });
