@@ -24,7 +24,8 @@ pub struct BetterE7App {
 }
 
 impl BetterE7App {
-    pub fn new(_creation_context: &eframe::CreationContext<'_>, config: AppConfig) -> Self {
+    pub fn new(creation_context: &eframe::CreationContext<'_>, config: AppConfig) -> Self {
+        install_japanese_font(&creation_context.egui_ctx);
         let mut app = Self {
             runtime: None,
             devices: Vec::new(),
@@ -367,6 +368,54 @@ impl BetterE7App {
     }
 }
 
+fn install_japanese_font(context: &egui::Context) {
+    let Some(bytes) = japanese_font_paths()
+        .iter()
+        .find_map(|path| std::fs::read(path).ok())
+    else {
+        tracing::warn!("Japanese font not found; text may render as tofu");
+        return;
+    };
+
+    let mut fonts = egui::FontDefinitions::default();
+    fonts.font_data.insert(
+        "japanese".to_owned(),
+        egui::FontData::from_owned(bytes).into(),
+    );
+    for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+        if let Some(fonts) = fonts.families.get_mut(&family) {
+            fonts.insert(0, "japanese".to_owned());
+        }
+    }
+    context.set_fonts(fonts);
+}
+
+#[cfg(target_os = "macos")]
+fn japanese_font_paths() -> &'static [&'static str] {
+    &[
+        "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc",
+        "/System/Library/Fonts/AppleSDGothicNeo.ttc",
+        "/System/Library/Fonts/STHeiti Medium.ttc",
+    ]
+}
+
+#[cfg(target_os = "windows")]
+fn japanese_font_paths() -> &'static [&'static str] {
+    &[
+        r"C:\Windows\Fonts\meiryo.ttc",
+        r"C:\Windows\Fonts\YuGothM.ttc",
+    ]
+}
+
+#[cfg(target_os = "linux")]
+fn japanese_font_paths() -> &'static [&'static str] {
+    &[
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/fonts-japanese-gothic.ttf",
+    ]
+}
+
 fn describe_input(command: PixelInputCommand) -> String {
     match command {
         PixelInputCommand::Tap { x, y } => format!("tap {x} {y}"),
@@ -391,8 +440,18 @@ impl eframe::App for BetterE7App {
         self.drain_runtime_events(context);
         self.show_toolbar(context);
         self.show_devices(context);
-        self.show_preview(context);
         self.show_logs(context);
+        self.show_preview(context);
         context.request_repaint_after(Duration::from_millis(100));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::japanese_font_paths;
+
+    #[test]
+    fn has_japanese_font_candidates() {
+        assert!(!japanese_font_paths().is_empty());
     }
 }
