@@ -25,7 +25,7 @@ ADBがPATHにない場合は`better-e7.toml`の`adb_path`を変更してくだ�
 
 FFmpegがPATHにない場合は`better-e7.toml`の`ffmpeg_path`を変更します。
 
-template認識を試す場合は検出対象を切り出したPNGまたはJPEGを用意し、`recognition_template_path`へ設定します。しきい値は`recognition_threshold`で調整します。未指定の場合は認識を無効にしたまま起動できます。
+汎用自動化を試す場合は`automation.example.toml`をコピーし、`automation_profile_path`へ設定します。profile内のtemplate pathはprofileのdirectoryを基準にします。単一templateの認識だけを試す場合は、従来どおり`recognition_template_path`と`recognition_threshold`を使えます。
 
 ## 実装の進め方
 

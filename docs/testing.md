@@ -16,6 +16,7 @@ Android端末が必要な確認と、通常の自動テストを分けます。
 - 保存画像を`VideoSource`として1回だけ取得できることを検証する
 - 生成したRGB画像からtemplateの位置と正規化矩形を検出する
 - ROI外の一致を検出しないことを検証する
+- 複数のtemplate recognizerが同じFrameの検出結果をまとめることを検証する
 - 認識中に複数Frameが届いた場合、未処理Frameを最新のものへ置き換えることを検証する
 - 複数ゲームを安定したIDで登録し、重複IDを拒否する
 - Triggerをpriority順に評価し、Consume後は低priorityの処理を呼ばない
@@ -28,6 +29,7 @@ Android端末が必要な確認と、通常の自動テストを分けます。
 - consumeするlog Ruleが低priorityのRuleを止めることを検証する
 - all / any / notを組み合わせたConditionを検証する
 - tap_detectionが最もconfidenceの高い検出位置を使うことを検証する
+- templateなしのprofileをmock Frameで認識し、Rule engineが入力を生成することを検証する
 
 このテストはUbuntu CIで実行し、ADB / scrcpy-server / FFmpegを必要としません。
 
@@ -46,3 +48,4 @@ Android端末が必要な確認と、通常の自動テストを分けます。
 - 停止後に入力が送信されない
 - USBを抜いた場合にsessionが停止する
 - `recognition_template_path`を指定すると一致箇所にlabel / confidence / 矩形が表示される
+- `automation_profile_path`を指定すると複数templateの認識 / Rule実行 / 入力がつながる

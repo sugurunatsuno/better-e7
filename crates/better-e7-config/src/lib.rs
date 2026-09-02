@@ -13,6 +13,7 @@ pub struct AppConfig {
     pub scrcpy_server_path: PathBuf,
     pub scrcpy_local_port: u16,
     pub scrcpy_max_size: u32,
+    pub automation_profile_path: Option<PathBuf>,
     pub recognition_template_path: Option<PathBuf>,
     pub recognition_threshold: f32,
 }
@@ -26,6 +27,7 @@ impl Default for AppConfig {
             scrcpy_server_path: PathBuf::from("third_party/scrcpy/scrcpy-server-v4.1"),
             scrcpy_local_port: 27_183,
             scrcpy_max_size: 1_920,
+            automation_profile_path: None,
             recognition_template_path: None,
             recognition_threshold: 0.9,
         }
@@ -131,6 +133,7 @@ mod tests {
 
         assert_eq!(config.adb_path, PathBuf::from("/opt/android/adb"));
         assert_eq!(config.ffmpeg_path, PathBuf::from("ffmpeg"));
+        assert_eq!(config.automation_profile_path, None);
         assert_eq!(config.recognition_template_path, None);
         assert_eq!(config.recognition_threshold, 0.9);
         assert_eq!(config.device_refresh_interval_ms, 1_500);

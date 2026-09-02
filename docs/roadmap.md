@@ -39,8 +39,8 @@
 - [x] Condition / Action / Rule engineを作る
 - [x] priority / cooldown / consumeを作る
 - [x] 1 tickにつき入力を1件へ制限する
-- [ ] profile内で複数templateを定義できるようにする
-- [ ] runtimeの認識結果と入力queueへ接続する
+- [x] profile内で複数templateを定義できるようにする
+- [x] runtimeの認識結果と入力queueへ接続する
 - [ ] GUIでprofileの選択 / 開始 / 停止を操作できるようにする
 - [ ] rule editorとdry-runを作る
 - [ ] 実行履歴を保存できるようにする

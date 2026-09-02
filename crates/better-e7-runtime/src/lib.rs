@@ -1,24 +1,25 @@
 use std::{
     error::Error,
     fmt,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         Arc, Condvar, Mutex,
         atomic::{AtomicBool, Ordering},
         mpsc as std_mpsc,
     },
     thread::{self, JoinHandle},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use better_e7_adb::{AdbClient, AdbDevice, AdbInputController, DeviceLister};
 use better_e7_android::{ActiveVideoSession, ScrcpySessionFactory, VideoSessionFactory};
+use better_e7_automation::{AutomationEngine, AutomationProfile};
 use better_e7_config::AppConfig;
 use better_e7_core::{
     Detection, Frame, InputCommand, InputController, NormalizedRect, PixelInputCommand, Recognizer,
 };
 use better_e7_video::{FfmpegProcessDecoderFactory, VideoDecoder, VideoDecoderFactory};
-use better_e7_vision::TemplateMatcher;
+use better_e7_vision::{RecognizerSet, TemplateMatcher};
 use tokio::{
     runtime::{Builder, Runtime},
     sync::mpsc,
@@ -62,6 +63,8 @@ pub enum RuntimeEvent {
     InputQueued(PixelInputCommand),
     InputExecuted(PixelInputCommand),
     DetectionsUpdated(Vec<Detection>),
+    AutomationRuleFired(String),
+    AutomationLog(String),
     Error(String),
 }
 
@@ -75,6 +78,7 @@ pub struct AppRuntime {
     command_tx: mpsc::UnboundedSender<RuntimeCommand>,
     event_rx: mpsc::UnboundedReceiver<RuntimeEvent>,
     latest_frame: Arc<Mutex<LatestFrameStore>>,
+    automation_profile_name: Option<String>,
     _runtime: Runtime,
 }
 
@@ -92,7 +96,7 @@ impl AppRuntime {
             Arc::new(ScrcpySessionFactory::new(config));
         let decoder_factory: Arc<dyn VideoDecoderFactory> =
             Arc::new(FfmpegProcessDecoderFactory::new(config.ffmpeg_path.clone()));
-        let recognizer = build_recognizer(config)?;
+        let automation = build_automation(config)?;
         let latest_frame = Arc::new(Mutex::new(LatestFrameStore::default()));
         let refresh_interval = Duration::from_millis(config.device_refresh_interval_ms);
 
@@ -102,7 +106,8 @@ impl AppRuntime {
             decoder_factory,
             latest_frame: Arc::clone(&latest_frame),
             adb_path: config.adb_path.clone(),
-            recognizer,
+            recognizer: automation.recognizer,
+            automation_engine: automation.engine,
         };
         let _coordinator = runtime.spawn(run_coordinator(
             resources,
@@ -115,6 +120,7 @@ impl AppRuntime {
             command_tx,
             event_rx,
             latest_frame,
+            automation_profile_name: automation.profile_name,
             _runtime: runtime,
         })
     }
@@ -132,6 +138,11 @@ impl AppRuntime {
     pub fn take_latest_frame(&self) -> Option<Frame> {
         self.latest_frame.lock().ok()?.pending.take()
     }
+
+    #[must_use]
+    pub fn automation_profile_name(&self) -> Option<&str> {
+        self.automation_profile_name.as_deref()
+    }
 }
 
 impl Drop for AppRuntime {
@@ -147,9 +158,53 @@ struct CoordinatorResources {
     latest_frame: Arc<Mutex<LatestFrameStore>>,
     adb_path: PathBuf,
     recognizer: Option<Arc<dyn Recognizer>>,
+    automation_engine: Option<AutomationEngine>,
 }
 
-fn build_recognizer(config: &AppConfig) -> Result<Option<Arc<dyn Recognizer>>, RuntimeError> {
+struct BuiltAutomation {
+    recognizer: Option<Arc<dyn Recognizer>>,
+    engine: Option<AutomationEngine>,
+    profile_name: Option<String>,
+}
+
+fn build_automation(config: &AppConfig) -> Result<BuiltAutomation, RuntimeError> {
+    let Some(profile_path) = config.automation_profile_path.as_ref() else {
+        return Ok(BuiltAutomation {
+            recognizer: build_legacy_recognizer(config)?,
+            engine: None,
+            profile_name: None,
+        });
+    };
+
+    let profile = AutomationProfile::load(profile_path)
+        .map_err(|error| RuntimeError::AutomationProfile(error.to_string()))?;
+    let mut recognizers = RecognizerSet::new();
+    for template in &profile.templates {
+        let path = resolve_profile_asset(profile_path, &template.path);
+        let matcher = TemplateMatcher::from_path(
+            template.id.clone(),
+            &path,
+            template.threshold,
+            template
+                .normalized_region()
+                .map_err(|error| RuntimeError::AutomationProfile(error.to_string()))?,
+        )
+        .map_err(|error| RuntimeError::Recognition(error.to_string()))?;
+        recognizers.add(matcher);
+    }
+    let profile_name = profile.name.clone();
+    let engine = AutomationEngine::new(profile)
+        .map_err(|error| RuntimeError::AutomationProfile(error.to_string()))?;
+    Ok(BuiltAutomation {
+        recognizer: Some(Arc::new(recognizers)),
+        engine: Some(engine),
+        profile_name: Some(profile_name),
+    })
+}
+
+fn build_legacy_recognizer(
+    config: &AppConfig,
+) -> Result<Option<Arc<dyn Recognizer>>, RuntimeError> {
     let Some(path) = config.recognition_template_path.as_ref() else {
         return Ok(None);
     };
@@ -167,6 +222,17 @@ fn build_recognizer(config: &AppConfig) -> Result<Option<Arc<dyn Recognizer>>, R
     Ok(Some(Arc::new(matcher)))
 }
 
+fn resolve_profile_asset(profile_path: &Path, asset_path: &Path) -> PathBuf {
+    if asset_path.is_absolute() {
+        asset_path.to_owned()
+    } else {
+        profile_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join(asset_path)
+    }
+}
+
 async fn run_coordinator(
     resources: CoordinatorResources,
     refresh_interval: Duration,
@@ -180,6 +246,7 @@ async fn run_coordinator(
         latest_frame,
         adb_path,
         recognizer,
+        mut automation_engine,
     } = resources;
     let mut interval = tokio::time::interval(refresh_interval);
     interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
@@ -191,6 +258,7 @@ async fn run_coordinator(
     let mut video_worker_stop: Option<Arc<AtomicBool>> = None;
     let mut input_queue: Option<InputQueue> = None;
     let mut recognition_worker: Option<RecognitionWorker> = None;
+    let mut automation_started_at: Option<Instant> = None;
 
     loop {
         tokio::select! {
@@ -220,6 +288,7 @@ async fn run_coordinator(
                                 queue.stop();
                             }
                             video_worker_stop = None;
+                            automation_started_at = None;
                             if let Some(mut worker) = recognition_worker.take() {
                                 worker.stop();
                             }
@@ -245,6 +314,51 @@ async fn run_coordinator(
                             send_event(&event_tx, RuntimeEvent::Error(message));
                         }
                         WorkerEvent::DetectionsUpdated(detections) => {
+                            if let (Some(engine), Some(started_at)) =
+                                (automation_engine.as_mut(), automation_started_at)
+                            {
+                                match engine.tick(&detections, started_at.elapsed()) {
+                                    Ok(report) => {
+                                        for rule_id in report.fired_rules {
+                                            send_event(
+                                                &event_tx,
+                                                RuntimeEvent::AutomationRuleFired(rule_id),
+                                            );
+                                        }
+                                        for message in report.logs {
+                                            send_event(
+                                                &event_tx,
+                                                RuntimeEvent::AutomationLog(message),
+                                            );
+                                        }
+                                        if let Some(input) = report.input {
+                                            match queue_input(
+                                                input.command,
+                                                &latest_frame,
+                                                input_queue.as_ref(),
+                                            ) {
+                                                Ok(command) => send_event(
+                                                    &event_tx,
+                                                    RuntimeEvent::InputQueued(command),
+                                                ),
+                                                Err(message) => send_event(
+                                                    &event_tx,
+                                                    RuntimeEvent::Error(format!(
+                                                        "automation rule {} failed to queue input: {message}",
+                                                        input.rule_id
+                                                    )),
+                                                ),
+                                            }
+                                        }
+                                    }
+                                    Err(error) => send_event(
+                                        &event_tx,
+                                        RuntimeEvent::Error(format!(
+                                            "automation engine failed: {error}"
+                                        )),
+                                    ),
+                                }
+                            }
                             send_event(&event_tx, RuntimeEvent::DetectionsUpdated(detections));
                         }
                         WorkerEvent::RecognitionFailed(message) => {
@@ -390,6 +504,10 @@ async fn run_coordinator(
                                 input_queue = Some(queue);
                                 recognition_worker = new_recognition_worker.take();
                                 video_worker_stop = Some(stop);
+                                if let Some(engine) = automation_engine.as_mut() {
+                                    engine.reset();
+                                }
+                                automation_started_at = Some(Instant::now());
                                 automation_state = AutomationState::Running;
                                 connection_state = ConnectionState::Connected;
                                 send_event(
@@ -443,19 +561,7 @@ async fn run_coordinator(
                             );
                             continue;
                         }
-                        let (width, height) = latest_frame
-                            .lock()
-                            .ok()
-                            .and_then(|frame| frame.dimensions)
-                            .unwrap_or((0, 0));
-                        let Some(queue) = input_queue.as_ref() else {
-                            send_event(
-                                &event_tx,
-                                RuntimeEvent::Error("input worker is not running".to_owned()),
-                            );
-                            continue;
-                        };
-                        match queue.submit(command, width, height) {
+                        match queue_input(command, &latest_frame, input_queue.as_ref()) {
                             Ok(command) => {
                                 send_event(&event_tx, RuntimeEvent::InputQueued(command));
                             }
@@ -709,6 +815,20 @@ impl Drop for RecognitionWorker {
     }
 }
 
+fn queue_input(
+    command: InputCommand,
+    latest_frame: &Mutex<LatestFrameStore>,
+    input_queue: Option<&InputQueue>,
+) -> Result<PixelInputCommand, String> {
+    let (width, height) = latest_frame
+        .lock()
+        .map_err(|_| "latest frame store is unavailable".to_owned())?
+        .dimensions
+        .unwrap_or((0, 0));
+    let queue = input_queue.ok_or_else(|| "input worker is not running".to_owned())?;
+    queue.submit(command, width, height)
+}
+
 struct InputQueue {
     command_tx: Option<std_mpsc::SyncSender<PixelInputCommand>>,
     stop: Arc<AtomicBool>,
@@ -832,6 +952,7 @@ enum WorkerEvent {
 #[derive(Debug)]
 pub enum RuntimeError {
     Build(std::io::Error),
+    AutomationProfile(String),
     Recognition(String),
     Stopped,
 }
@@ -840,6 +961,9 @@ impl fmt::Display for RuntimeError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Build(error) => write!(formatter, "failed to build runtime: {error}"),
+            Self::AutomationProfile(message) => {
+                write!(formatter, "failed to configure automation profile: {message}")
+            }
             Self::Recognition(message) => {
                 write!(formatter, "failed to configure recognition: {message}")
             }
@@ -852,7 +976,7 @@ impl Error for RuntimeError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Build(error) => Some(error),
-            Self::Recognition(_) | Self::Stopped => None,
+            Self::AutomationProfile(_) | Self::Recognition(_) | Self::Stopped => None,
         }
     }
 }
@@ -861,6 +985,7 @@ impl Error for RuntimeError {
 mod tests {
     use std::{
         collections::VecDeque,
+        fs,
         sync::mpsc::{Receiver, Sender},
         time::Instant,
     };
@@ -998,5 +1123,85 @@ mod tests {
         worker.stop();
 
         assert_eq!(*recognizer.frame_ids.lock().unwrap(), [1, 3]);
+    }
+
+    #[test]
+    fn builds_a_profile_and_ticks_it_without_android() {
+        let profile_path = std::env::temp_dir().join(format!(
+            "better-e7-runtime-profile-{}.toml",
+            std::process::id()
+        ));
+        fs::write(
+            &profile_path,
+            r#"
+                name = "mock-profile"
+
+                [[rules]]
+                id = "go-home"
+
+                [rules.condition]
+                type = "always"
+
+                [rules.action]
+                type = "key"
+                android_key_code = 3
+            "#,
+        )
+        .unwrap();
+        let config = AppConfig {
+            automation_profile_path: Some(profile_path.clone()),
+            ..AppConfig::default()
+        };
+
+        let mut automation = build_automation(&config).unwrap();
+        let frame = Frame::new(
+            1,
+            Instant::now(),
+            1,
+            1,
+            PixelFormat::Rgb8,
+            vec![0; 3],
+        )
+        .unwrap();
+        let detections = automation
+            .recognizer
+            .as_ref()
+            .unwrap()
+            .recognize(&frame)
+            .unwrap();
+        let report = automation
+            .engine
+            .as_mut()
+            .unwrap()
+            .tick(&detections, Duration::ZERO)
+            .unwrap();
+        let input = report.input.unwrap();
+        let (started_tx, started_rx) = std_mpsc::channel();
+        let (release_tx, release_rx) = std_mpsc::channel();
+        let controller = Arc::new(BlockingInputController {
+            commands: Mutex::new(Vec::new()),
+            started_tx,
+            release_rx: Mutex::new(release_rx),
+        });
+        let (worker_event_tx, _worker_event_rx) = mpsc::unbounded_channel();
+        let mut queue = InputQueue::spawn(controller.clone(), worker_event_tx).unwrap();
+        let latest_frame = Mutex::new(LatestFrameStore {
+            pending: None,
+            dimensions: Some((1, 1)),
+        });
+        let queued = queue_input(input.command, &latest_frame, Some(&queue)).unwrap();
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+
+        assert_eq!(automation.profile_name.as_deref(), Some("mock-profile"));
+        assert!(detections.is_empty());
+        assert_eq!(
+            queued,
+            PixelInputCommand::Key {
+                android_key_code: 3
+            }
+        );
+        release_tx.send(()).unwrap();
+        queue.stop();
+        let _ = fs::remove_file(profile_path);
     }
 }

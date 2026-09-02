@@ -7,6 +7,17 @@ AutomationProfileは認識結果から入力を生成する汎用的なTOML設�
 ```toml
 name = "confirm-buttons"
 
+[[templates]]
+id = "confirm"
+path = "assets/confirm.png"
+threshold = 0.9
+
+[templates.region]
+left = 0.0
+top = 0.0
+right = 1.0
+bottom = 1.0
+
 [[rules]]
 id = "confirm"
 priority = 100
@@ -24,6 +35,17 @@ label = "confirm"
 ```
 
 完全な例は`automation.example.toml`にあります。
+
+## Template
+
+| 項目 | 内容 | 初期値 |
+|---|---|---|
+| id | 検出結果のlabelとして使うprofile内で重複しないID | 必須 |
+| path | PNGまたはJPEGのtemplate画像 | 必須 |
+| threshold | 一致率のしきい値 | 0.9 |
+| region | 認識する正規化ROI | 画面全体 |
+
+`path`の相対パスはprofileファイルがあるdirectoryを基準に解決します。複数の`[[templates]]`を定義すると、同じFrameに対してすべてを認識し、検出結果をまとめてRule engineへ渡します。
 
 ## Rule
 
@@ -64,4 +86,8 @@ label = "confirm"
 
 座標は0.0から1.0で指定します。不正な座標 / 重複ID / 空のlabel / 空のCondition groupはprofileの読み込み時に拒否します。
 
-現時点ではloaderとengineまで実装しています。runtime / GUIとの接続、複数templateの読み込み、editor / dry-runは次の実装範囲です。
+## Runtimeでの実行
+
+`better-e7.toml`の`automation_profile_path`へprofileを指定します。開始時にengineのcooldown状態をresetし、認識結果ごとに1回tickします。生成された入力は手動入力と同じ順序付きqueueを通り、GUIには実行Rule / profileのlog / 最後に実行したRuleを表示します。
+
+profileにtemplateがなくてもRule engineは動きます。この構成は`always`や固定座標のActionをmock Frameで検証するときに使えます。editor / dry-run / 実行履歴の保存は今後の実装範囲です。

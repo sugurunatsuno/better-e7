@@ -9,6 +9,7 @@ device_refresh_interval_ms = 2000
 scrcpy_server_path = "third_party/scrcpy/scrcpy-server-v4.1"
 scrcpy_local_port = 27183
 scrcpy_max_size = 1920
+# automation_profile_path = "automation.toml"
 recognition_threshold = 0.9
 # recognition_template_path = "assets/confirm.png"
 ```
@@ -50,6 +51,12 @@ Androidから送る映像の最大辺です。初期値は1920です。0を指�
 検出するtemplate画像のパスです。PNGとJPEGを読み込めます。未指定の場合は認識workerを起動せず、映像previewと入力だけを動かします。相対パスはアプリを起動したディレクトリから解決されます。
 
 検出labelにはファイル名から拡張子を除いた部分を使います。たとえば`assets/confirm.png`は`confirm`になります。
+
+## automation_profile_path
+
+汎用自動化profileのパスです。相対パスはアプリを起動したdirectoryから解決されます。profile内のtemplate画像はprofileファイルがあるdirectoryを基準に解決されます。
+
+指定した場合はprofile内の複数templateとRule engineを使い、`recognition_template_path` / `recognition_threshold`による単一template設定より優先します。未指定の場合は従来の単一template認識をそのまま使えます。
 
 ## recognition_threshold
 

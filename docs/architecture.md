@@ -24,7 +24,7 @@ flowchart TD
 | better-e7-config | TOML設定の読み書きと検証 | serde / toml |
 | better-e7-automation | 汎用profile / Condition / Action / Rule engine | core / serde / toml |
 | better-e7-adb | ADB process / 端末一覧 / 入力 | core / Rust標準ライブラリ |
-| better-e7-runtime | Worker / command / event / 最新Frame / 入力queue / 認識worker | config / core / adb / video / vision / Tokio |
+| better-e7-runtime | Worker / command / event / 最新Frame / 入力queue / 認識worker / Rule実行 | config / core / automation / adb / video / vision / Tokio |
 | better-e7-android | scrcpy-server起動 / transport / control | core / adb / Tokio |
 | better-e7-video | ストリーム解析 / デコード / 色変換 | core / FFmpeg |
 | better-e7-vision | 保存画像source / テンプレート / 将来の色 / OCR / ONNX | core / image / 将来のOpenCV / ort |
@@ -96,7 +96,9 @@ flowchart TD
 
 Ruleはpriorityの高い順に評価します。cooldown中のRuleと無効なRuleは飛ばします。入力Actionを1件生成した時点でtickを終了するため、同じFrameから複数の入力は生成しません。log Actionは`consume = false`にすると低priorityのRuleを続けて評価できます。
 
-engineへ渡す時間は外部で管理します。単体テストでは任意の経過時間を渡せるため、待機やsleepを使わずcooldownを検証できます。runtimeへ接続するときはsession開始時刻からの単調増加時間を渡します。
+engineへ渡す時間は外部で管理します。単体テストでは任意の経過時間を渡せるため、待機やsleepを使わずcooldownを検証できます。runtimeはsession開始時刻からの単調増加時間を渡し、session開始ごとにcooldown状態をresetします。
+
+profile内の複数templateは`RecognizerSet`へまとめます。認識workerが返した検出一覧をengineへ渡し、生成された入力を手動操作と同じ入力queueへ送ります。templateの相対pathはprofileのdirectoryを基準にするため、profileとassetを一緒に移動できます。GUIはprofile名 / 最後に実行したRule / log Actionをruntime eventとして受け取ります。
 
 | 経路 | 方針 |
 |---|---|

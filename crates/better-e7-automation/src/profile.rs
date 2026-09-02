@@ -1,11 +1,19 @@
-use std::{collections::BTreeSet, error::Error, fmt, fs, io, path::Path};
+use std::{
+    collections::BTreeSet,
+    error::Error,
+    fmt, fs, io,
+    path::{Path, PathBuf},
+};
 
+use better_e7_core::NormalizedRect;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct AutomationProfile {
     pub name: String,
+    #[serde(default)]
+    pub templates: Vec<TemplateDefinition>,
     #[serde(default)]
     pub rules: Vec<AutomationRule>,
 }
@@ -34,6 +42,17 @@ impl AutomationProfile {
                 "profile name must not be empty".to_owned(),
             ));
         }
+        let mut template_ids = BTreeSet::new();
+        for template in &self.templates {
+            validate_id(&template.id)?;
+            if !template_ids.insert(template.id.as_str()) {
+                return Err(ProfileError::Invalid(format!(
+                    "template id is duplicated: {}",
+                    template.id
+                )));
+            }
+            template.validate()?;
+        }
         let mut ids = BTreeSet::new();
         for rule in &self.rules {
             validate_id(&rule.id)?;
@@ -47,6 +66,61 @@ impl AutomationProfile {
             rule.action.validate()?;
         }
         Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct TemplateDefinition {
+    pub id: String,
+    pub path: PathBuf,
+    #[serde(default = "default_minimum_confidence")]
+    pub threshold: f32,
+    #[serde(default)]
+    pub region: TemplateRegion,
+}
+
+impl TemplateDefinition {
+    pub fn normalized_region(&self) -> Result<NormalizedRect, ProfileError> {
+        NormalizedRect::new(
+            self.region.left,
+            self.region.top,
+            self.region.right,
+            self.region.bottom,
+        )
+        .map_err(|error| ProfileError::Invalid(error.to_string()))
+    }
+
+    fn validate(&self) -> Result<(), ProfileError> {
+        if self.path.as_os_str().is_empty() {
+            return Err(ProfileError::Invalid(format!(
+                "template path must not be empty: {}",
+                self.id
+            )));
+        }
+        validate_confidence(self.threshold)?;
+        self.normalized_region()?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct TemplateRegion {
+    pub left: f32,
+    pub top: f32,
+    pub right: f32,
+    pub bottom: f32,
+}
+
+impl Default for TemplateRegion {
+    fn default() -> Self {
+        Self {
+            left: 0.0,
+            top: 0.0,
+            right: 1.0,
+            bottom: 1.0,
+        }
     }
 }
 
@@ -274,6 +348,12 @@ mod tests {
             AutomationProfile::from_toml(include_str!("../../../automation.example.toml")).unwrap();
 
         assert_eq!(profile.name, "confirm-and-recover");
+        assert_eq!(profile.templates.len(), 1);
+        assert_eq!(profile.templates[0].id, "confirm");
+        assert_eq!(
+            profile.templates[0].normalized_region().unwrap(),
+            NormalizedRect::full()
+        );
         assert_eq!(profile.rules.len(), 2);
         assert_eq!(profile.rules[0].id, "confirm");
         assert!(matches!(
@@ -286,6 +366,7 @@ mod tests {
     fn rejects_duplicate_rule_ids() {
         let profile = AutomationProfile {
             name: "duplicate".to_owned(),
+            templates: Vec::new(),
             rules: vec![rule("same"), rule("same")],
         };
 
@@ -298,6 +379,7 @@ mod tests {
         invalid.action = Action::Tap { x: 1.1, y: 0.5 };
         let profile = AutomationProfile {
             name: "invalid".to_owned(),
+            templates: Vec::new(),
             rules: vec![invalid],
         };
 
@@ -308,6 +390,12 @@ mod tests {
     fn serializes_and_parses_a_profile() {
         let profile = AutomationProfile {
             name: "roundtrip".to_owned(),
+            templates: vec![TemplateDefinition {
+                id: "confirm".to_owned(),
+                path: PathBuf::from("assets/confirm.png"),
+                threshold: 0.95,
+                region: TemplateRegion::default(),
+            }],
             rules: vec![rule("log")],
         };
 
@@ -315,6 +403,42 @@ mod tests {
         let parsed = AutomationProfile::from_toml(&serialized).unwrap();
 
         assert_eq!(parsed, profile);
+    }
+
+    #[test]
+    fn rejects_duplicate_template_ids_and_invalid_regions() {
+        let template = TemplateDefinition {
+            id: "confirm".to_owned(),
+            path: PathBuf::from("confirm.png"),
+            threshold: 0.9,
+            region: TemplateRegion::default(),
+        };
+        let duplicate = AutomationProfile {
+            name: "duplicate".to_owned(),
+            templates: vec![template.clone(), template],
+            rules: Vec::new(),
+        };
+        assert!(matches!(duplicate.validate(), Err(ProfileError::Invalid(_))));
+
+        let invalid_region = AutomationProfile {
+            name: "invalid-region".to_owned(),
+            templates: vec![TemplateDefinition {
+                id: "confirm".to_owned(),
+                path: PathBuf::from("confirm.png"),
+                threshold: 0.9,
+                region: TemplateRegion {
+                    left: 0.8,
+                    top: 0.0,
+                    right: 0.2,
+                    bottom: 1.0,
+                },
+            }],
+            rules: Vec::new(),
+        };
+        assert!(matches!(
+            invalid_region.validate(),
+            Err(ProfileError::Invalid(_))
+        ));
     }
 
     fn rule(id: &str) -> AutomationRule {

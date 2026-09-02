@@ -1,5 +1,16 @@
 name = "confirm-and-recover"
 
+[[templates]]
+id = "confirm"
+path = "assets/confirm.png"
+threshold = 0.9
+
+[templates.region]
+left = 0.0
+top = 0.0
+right = 1.0
+bottom = 1.0
+
 [[rules]]
 id = "confirm"
 priority = 100

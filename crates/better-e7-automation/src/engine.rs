@@ -412,6 +412,7 @@ mod tests {
     fn profile(rules: Vec<AutomationRule>) -> AutomationProfile {
         AutomationProfile {
             name: "test".to_owned(),
+            templates: Vec::new(),
             rules,
         }
     }

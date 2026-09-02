@@ -26,6 +26,8 @@ pub struct BetterE7App {
     recognition_fps: f32,
     recognition_updates: u32,
     recognition_window_started: Instant,
+    automation_profile_name: Option<String>,
+    last_automation_rule: Option<String>,
     logs: Vec<String>,
 }
 
@@ -44,13 +46,20 @@ impl BetterE7App {
             recognition_fps: 0.0,
             recognition_updates: 0,
             recognition_window_started: Instant::now(),
+            automation_profile_name: None,
+            last_automation_rule: None,
             logs: vec!["better-e7を起動しました".to_owned()],
         };
 
         match AppRuntime::new(&config) {
             Ok(runtime) => {
+                app.automation_profile_name =
+                    runtime.automation_profile_name().map(str::to_owned);
                 app.runtime = Some(runtime);
                 app.push_log("ADB端末の監視を開始しました");
+                if let Some(profile_name) = app.automation_profile_name.clone() {
+                    app.push_log(format!("自動化profileを読み込みました: {profile_name}"));
+                }
             }
             Err(error) => {
                 error!(%error, "runtime initialization failed");
@@ -101,6 +110,7 @@ impl BetterE7App {
                         self.recognition_fps = 0.0;
                         self.recognition_updates = 0;
                         self.recognition_window_started = Instant::now();
+                        self.last_automation_rule = None;
                     }
                     self.push_log(match state {
                         ConnectionState::Disconnected => "映像接続を終了しました",
@@ -126,6 +136,13 @@ impl BetterE7App {
                         self.recognition_updates = 0;
                         self.recognition_window_started = Instant::now();
                     }
+                }
+                RuntimeEvent::AutomationRuleFired(rule_id) => {
+                    self.last_automation_rule = Some(rule_id.clone());
+                    self.push_log(format!("Ruleを実行しました: {rule_id}"));
+                }
+                RuntimeEvent::AutomationLog(message) => {
+                    self.push_log(format!("自動化: {message}"));
                 }
                 RuntimeEvent::Error(message) => {
                     error!(%message, "runtime error");
@@ -300,7 +317,11 @@ impl BetterE7App {
 
                 ui.separator();
                 ui.heading("タスク");
-                ui.label("ゲームプラグインは未実装です");
+                ui.label(format!(
+                    "profile: {}",
+                    self.automation_profile_name.as_deref().unwrap_or("未設定")
+                ));
+                ui.label("汎用Rule engineで実行します");
             });
         if let Some(command) = input_command {
             self.send(RuntimeCommand::SubmitInput(command));
@@ -370,7 +391,10 @@ impl BetterE7App {
                 .map(|[width, height]| format!("{width} x {height}"))
                 .unwrap_or_else(|| "--".to_owned());
             ui.label(format!("映像解像度: {resolution}"));
-            ui.label("ゲーム状態: Unknown");
+            ui.label(format!(
+                "最後のRule: {}",
+                self.last_automation_rule.as_deref().unwrap_or("未実行")
+            ));
         });
         if let Some(command) = input_command {
             self.send(RuntimeCommand::SubmitInput(command));

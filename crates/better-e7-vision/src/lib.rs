@@ -53,6 +53,44 @@ pub struct TemplateMatcher {
     roi: NormalizedRect,
 }
 
+#[derive(Default)]
+pub struct RecognizerSet {
+    recognizers: Vec<Box<dyn Recognizer>>,
+}
+
+impl RecognizerSet {
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            recognizers: Vec::new(),
+        }
+    }
+
+    pub fn add(&mut self, recognizer: impl Recognizer + 'static) {
+        self.recognizers.push(Box::new(recognizer));
+    }
+
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.recognizers.len()
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.recognizers.is_empty()
+    }
+}
+
+impl Recognizer for RecognizerSet {
+    fn recognize(&self, frame: &Frame) -> Result<Vec<Detection>, RecognitionError> {
+        let mut detections = Vec::new();
+        for recognizer in &self.recognizers {
+            detections.extend(recognizer.recognize(frame)?);
+        }
+        Ok(detections)
+    }
+}
+
 impl TemplateMatcher {
     pub fn new(
         label: impl Into<String>,
@@ -327,5 +365,33 @@ mod tests {
         assert_eq!(frame.pixels(), [1, 2, 3, 4, 5, 6]);
         assert!(source.try_latest_frame().unwrap().is_none());
         fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn combines_detections_from_multiple_recognizers() {
+        let red = rgb_frame(1, 1, vec![255, 0, 0]);
+        let green = rgb_frame(1, 1, vec![0, 255, 0]);
+        let frame = rgb_frame(
+            2,
+            1,
+            vec![
+                255, 0, 0,
+                0, 255, 0,
+            ],
+        );
+        let mut recognizers = RecognizerSet::new();
+        recognizers.add(
+            TemplateMatcher::new("red", red, 0.99, NormalizedRect::full()).unwrap(),
+        );
+        recognizers.add(
+            TemplateMatcher::new("green", green, 0.99, NormalizedRect::full()).unwrap(),
+        );
+
+        let detections = recognizers.recognize(&frame).unwrap();
+
+        assert_eq!(recognizers.len(), 2);
+        assert_eq!(detections.len(), 2);
+        assert_eq!(detections[0].label, "red");
+        assert_eq!(detections[1].label, "green");
     }
 }
