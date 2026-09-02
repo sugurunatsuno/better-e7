@@ -1,4 +1,7 @@
-use std::{path::PathBuf, time::{Duration, Instant}};
+use std::{
+    path::PathBuf,
+    time::{Duration, Instant},
+};
 
 use better_e7_adb::AdbDevice;
 use better_e7_config::AppConfig;
@@ -172,9 +175,7 @@ impl BetterE7App {
                 RuntimeEvent::AutomationInputPlanned { rule_id, command } => {
                     let description = describe_normalized_input(command);
                     self.last_planned_input = Some(description.clone());
-                    self.push_log(format!(
-                        "dry-run: {rule_id} / {description}"
-                    ));
+                    self.push_log(format!("dry-run: {rule_id} / {description}"));
                 }
                 RuntimeEvent::Error(message) => {
                     error!(%message, "runtime error");
@@ -379,10 +380,7 @@ impl BetterE7App {
                 }
                 let mut enabled = self.automation_dry_run;
                 if ui
-                    .add_enabled(
-                        can_configure,
-                        egui::Checkbox::new(&mut enabled, "dry-run"),
-                    )
+                    .add_enabled(can_configure, egui::Checkbox::new(&mut enabled, "dry-run"))
                     .changed()
                 {
                     dry_run = Some(enabled);
@@ -547,11 +545,7 @@ fn describe_normalized_input(command: InputCommand) -> String {
         InputCommand::Tap { point } => {
             format!("tap {:.3} {:.3}", point.x(), point.y())
         }
-        InputCommand::Swipe {
-            from,
-            to,
-            duration,
-        } => format!(
+        InputCommand::Swipe { from, to, duration } => format!(
             "swipe {:.3} {:.3} {:.3} {:.3} {}ms",
             from.x(),
             from.y(),

@@ -164,7 +164,6 @@ impl AppRuntime {
     pub fn take_latest_frame(&self) -> Option<Frame> {
         self.latest_frame.lock().ok()?.pending.take()
     }
-
 }
 
 impl Drop for AppRuntime {
