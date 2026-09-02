@@ -275,6 +275,9 @@ fn build_automation(config: &AppConfig) -> Result<BuiltAutomation, RuntimeError>
 fn build_profile_automation(profile_path: &Path) -> Result<BuiltAutomation, RuntimeError> {
     let profile = AutomationProfile::load(profile_path)
         .map_err(|error| RuntimeError::AutomationProfile(error.to_string()))?;
+    profile
+        .validate_template_references()
+        .map_err(|error| RuntimeError::AutomationProfile(error.to_string()))?;
     let recognizers = build_profile_recognizers(profile_path, &profile)?;
     let profile_name = profile.name.clone();
     let engine = AutomationEngine::new(profile)
@@ -318,6 +321,9 @@ pub fn validate_automation_profile(
 ) -> Result<AutomationProfileValidation, RuntimeError> {
     let profile_path = profile_path.as_ref();
     let profile = AutomationProfile::load(profile_path)
+        .map_err(|error| RuntimeError::AutomationProfile(error.to_string()))?;
+    profile
+        .validate_template_references()
         .map_err(|error| RuntimeError::AutomationProfile(error.to_string()))?;
     build_profile_recognizers(profile_path, &profile)?;
     Ok(AutomationProfileValidation {

@@ -63,8 +63,20 @@ impl AutomationProfile {
                 )));
             }
             rule.condition.validate()?;
-            rule.condition.validate_references(&template_ids)?;
             rule.action.validate()?;
+        }
+        Ok(())
+    }
+
+    pub fn validate_template_references(&self) -> Result<(), ProfileError> {
+        self.validate()?;
+        let template_ids = self
+            .templates
+            .iter()
+            .map(|template| template.id.as_str())
+            .collect::<BTreeSet<_>>();
+        for rule in &self.rules {
+            rule.condition.validate_references(&template_ids)?;
             rule.action.validate_references(&template_ids)?;
         }
         Ok(())
@@ -497,7 +509,7 @@ mod tests {
                 templates: Vec::new(),
                 rules: vec![rule],
             };
-            let error = profile.validate().unwrap_err();
+            let error = profile.validate_template_references().unwrap_err();
             assert!(error.to_string().contains("missing"));
         }
     }
