@@ -18,6 +18,8 @@ cargo test -p better-e7-core
 cargo run -p better-e7-app
 ```
 
+ADBがPATHにない場合は`better-e7.toml`の`adb_path`を変更してください。書式は [configuration.md](configuration.md) にあります。
+
 ## 実装の進め方
 
 縦切りで動く範囲を増やします。最初の縦切りは次の流れです。
@@ -43,7 +45,7 @@ flowchart LR
 
 ## ブランチと変更
 
-小さな機能単位でbranchを作り、mainへのPRでCIを通します。コミットにはコードと対応するテスト / 文書を含めます。
+通常の作業はdevelopで進めます。必要に応じてdevelopから小さな機能branchを作り、完了後にdevelopへ戻します。リリース可能な状態になったらdevelopからmainへのPRを作ります。コミットにはコードと対応するテスト / 文書を含めます。
 
 ## ローカル制約
 

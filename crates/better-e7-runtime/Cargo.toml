@@ -1,5 +1,5 @@
 [package]
-name = "better-e7-app"
+name = "better-e7-runtime"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,11 +10,8 @@ publish = false
 [dependencies]
 better-e7-adb = { path = "../better-e7-adb" }
 better-e7-config = { path = "../better-e7-config" }
-better-e7-core = { path = "../better-e7-core" }
-better-e7-runtime = { path = "../better-e7-runtime" }
-eframe = "0.32"
-tracing = "0.1"
-tracing-subscriber = "0.3"
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time"] }
 
 [lints]
 workspace = true
+

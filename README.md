@@ -30,7 +30,10 @@ FFmpeg / OpenCV / ONNX Runtimeは必要になるまでworkspaceへ追加しま�
 
 ```text
 crates/
+  better-e7-adb/   ADB実行と端末情報の解析
   better-e7-core/  OSやGUIに依存しない型とtrait
+  better-e7-config/ TOML設定
+  better-e7-runtime/ Workerと状態管理
   better-e7-app/   eguiデスクトップアプリ
 docs/
   decisions/       技術判断の記録
@@ -47,7 +50,8 @@ cargo run -p better-e7-app
 
 必要な環境と実装順は [docs/development.md](docs/development.md) を参照してください。要件は [docs/requirements.md](docs/requirements.md)、設計は [docs/architecture.md](docs/architecture.md) にあります。
 
+設定項目は [docs/configuration.md](docs/configuration.md) にあります。
+
 ## ライセンス
 
 現時点ではライセンスを付与していません。公開や外部配布を始める前に決定します。
-

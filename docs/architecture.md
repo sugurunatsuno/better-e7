@@ -21,14 +21,17 @@ flowchart TD
 | crate | 責務 | 依存してよいもの |
 |---|---|---|
 | better-e7-core | Frame / 座標 / ポート / 共通エラー | Rust標準ライブラリ |
-| better-e7-android | ADB / scrcpy-server起動 / control | core / Tokio |
+| better-e7-config | TOML設定の読み書きと検証 | serde / toml |
+| better-e7-adb | ADB process / 端末一覧 / 入力 | Rust標準ライブラリ |
+| better-e7-runtime | Worker / command / event / 状態管理 | config / adb / Tokio |
+| better-e7-android | scrcpy-server起動 / transport / control | core / adb / Tokio |
 | better-e7-video | ストリーム解析 / デコード / 色変換 | core / FFmpeg |
 | better-e7-vision | テンプレート / 色 / OCR / ONNX | core / OpenCV / ort |
 | better-e7-game-api | ゲーム / Trigger / Task向けAPI | core |
 | better-e7-app | GUI / 構成 / 各処理の起動と停止 | 全公開crate / egui |
 | better-e7-cli | ヘッドレス実行と検証 | GUI以外の公開crate |
 
-初回コミットではcoreとappだけを作ります。未実装crateは対応する縦切り機能へ着手するときに追加します。
+現在はcore / config / androidのADB部分 / runtime / appを実装しています。video / vision / game-apiは対応する縦切り機能へ着手するときに追加します。
 
 ```mermaid
 flowchart TD
@@ -53,6 +56,8 @@ flowchart TD
 ## 並行処理
 
 GUIスレッドではブロッキング処理を行いません。Tokio runtimeで端末監視 / 映像受信 / デコード / 自動化を動かし、境界では容量を制限したchannelを使います。
+
+現在のruntimeはeguiからcommandを受け、ADB端末一覧 / 選択端末 / 自動化状態をeventとして返します。ADB processは`spawn_blocking`で実行するためGUIスレッドを止めません。
 
 | 経路 | 方針 |
 |---|---|
@@ -82,4 +87,3 @@ scrcpyの内部プロトコルには互換性保証がありません。対応�
 - GUIに常時見える停止操作を置く
 - 外部から読み込む画像 / 設定 / モデルのパスを検証する
 - ADB接続情報や端末情報を通常ログへ過剰に残さない
-

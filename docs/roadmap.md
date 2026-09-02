@@ -6,12 +6,12 @@
 - [x] CoreのFrame / 正規化座標 / ポートを定義する
 - [x] eguiアプリの起動骨格を作る
 - [x] Ubuntuの通常CIと手動のWindows / macOS確認を作る
-- [ ] ログと設定ファイルの形式を決める
-- [ ] Workerの起動 / 停止を管理するruntimeを作る
+- [x] ログと設定ファイルの形式を決める
+- [x] Workerの起動 / 停止を管理するruntimeを作る
 
 ## Android映像
 
-- [ ] ADB端末の列挙と選択を作る
+- [x] ADB端末の列挙と選択を作る
 - [ ] scrcpy-serverのバージョンと配布方法を決める
 - [ ] serverの転送 / 起動 / 停止を作る
 - [ ] video socketを受信する
