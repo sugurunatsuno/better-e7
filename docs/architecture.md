@@ -22,8 +22,8 @@ flowchart TD
 |---|---|---|
 | better-e7-core | Frame / 座標 / ポート / 共通エラー | Rust標準ライブラリ |
 | better-e7-config | TOML設定の読み書きと検証 | serde / toml |
-| better-e7-adb | ADB process / 端末一覧 / 入力 | Rust標準ライブラリ |
-| better-e7-runtime | Worker / command / event / 最新Frame管理 | config / adb / video / Tokio |
+| better-e7-adb | ADB process / 端末一覧 / 入力 | core / Rust標準ライブラリ |
+| better-e7-runtime | Worker / command / event / 最新Frame / 入力queue | config / core / adb / video / Tokio |
 | better-e7-android | scrcpy-server起動 / transport / control | core / adb / Tokio |
 | better-e7-video | ストリーム解析 / デコード / 色変換 | core / FFmpeg |
 | better-e7-vision | テンプレート / 色 / OCR / ONNX | core / OpenCV / ort |
@@ -53,6 +53,8 @@ flowchart TD
 
 座標は`NormalizedPoint`で表し、値域を0.0から1.0へ制限します。端末のピクセル座標への変換は入力直前に行います。認識範囲や矩形にも同じ正規化座標系を使います。
 
+ゲーム側からruntimeへ渡す`InputCommand`は正規化座標を保持します。runtimeは最新Frameの幅と高さを使って`PixelInputCommand`へ変換し、ADB backendへ渡します。キー入力は画面サイズを必要としません。
+
 ## 並行処理
 
 GUIスレッドではブロッキング処理を行いません。Tokio runtimeで端末監視 / 映像受信 / デコード / 自動化を動かし、境界では容量を制限したchannelを使います。
@@ -62,6 +64,8 @@ GUIスレッドではブロッキング処理を行いません。Tokio runtime�
 scrcpy sessionを開始すると、専用のblocking workerがvideo socketを読み続けます。停止flagは500msごとに確認でき、終了時はsocket / server process / ADB forwardの順に片付けます。H.264は外部FFmpeg processの標準入力へ送り、標準出力のPPM streamを`Frame`へ変換します。FFmpegの具象実装は`VideoDecoder`の内側に閉じ込め、将来FFI backendへ交換できるようにします。
 
 デコード済みFrameはruntimeのlatest frame slotへ保存します。GUIが取得する前に次のFrameが届いた場合は古いFrameを置き換え、遅延やメモリ増加を防ぎます。eguiはRGB / RGBAをtextureへ変換し、縦横比を維持してpreviewへ表示します。
+
+入力は容量64件の専用queueで順番に処理します。ADB commandは入力workerだけが実行するため、同時に複数の操作を送りません。停止時は新しい入力を拒否して未実行のqueueを破棄し、実行中のcommandが終了してからworkerを閉じます。
 
 | 経路 | 方針 |
 |---|---|

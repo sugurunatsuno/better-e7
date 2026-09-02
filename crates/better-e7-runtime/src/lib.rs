@@ -1,17 +1,20 @@
 use std::{
     error::Error,
     fmt,
+    path::PathBuf,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
+        mpsc as std_mpsc,
     },
+    thread::{self, JoinHandle},
     time::Duration,
 };
 
-use better_e7_adb::{AdbClient, AdbDevice, DeviceLister};
+use better_e7_adb::{AdbClient, AdbDevice, AdbInputController, DeviceLister};
 use better_e7_android::{ActiveVideoSession, ScrcpySessionFactory, VideoSessionFactory};
 use better_e7_config::AppConfig;
-use better_e7_core::Frame;
+use better_e7_core::{Frame, InputCommand, InputController, PixelInputCommand};
 use better_e7_video::{FfmpegProcessDecoderFactory, VideoDecoder, VideoDecoderFactory};
 use tokio::{
     runtime::{Builder, Runtime},
@@ -20,13 +23,15 @@ use tokio::{
 };
 
 const VIDEO_BUFFER_SIZE: usize = 64 * 1_024;
+const INPUT_QUEUE_SIZE: usize = 64;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum RuntimeCommand {
     RefreshDevices,
     SelectDevice(String),
     StartAutomation,
     StopAutomation,
+    SubmitInput(InputCommand),
     Shutdown,
 }
 
@@ -51,13 +56,21 @@ pub enum RuntimeEvent {
     AutomationStateChanged(AutomationState),
     ConnectionStateChanged(ConnectionState),
     VideoBytesReceived(u64),
+    InputQueued(PixelInputCommand),
+    InputExecuted(PixelInputCommand),
     Error(String),
+}
+
+#[derive(Default)]
+struct LatestFrameStore {
+    pending: Option<Frame>,
+    dimensions: Option<(u32, u32)>,
 }
 
 pub struct AppRuntime {
     command_tx: mpsc::UnboundedSender<RuntimeCommand>,
     event_rx: mpsc::UnboundedReceiver<RuntimeEvent>,
-    latest_frame: Arc<Mutex<Option<Frame>>>,
+    latest_frame: Arc<Mutex<LatestFrameStore>>,
     _runtime: Runtime,
 }
 
@@ -75,7 +88,7 @@ impl AppRuntime {
             Arc::new(ScrcpySessionFactory::new(config));
         let decoder_factory: Arc<dyn VideoDecoderFactory> =
             Arc::new(FfmpegProcessDecoderFactory::new(config.ffmpeg_path.clone()));
-        let latest_frame = Arc::new(Mutex::new(None));
+        let latest_frame = Arc::new(Mutex::new(LatestFrameStore::default()));
         let refresh_interval = Duration::from_millis(config.device_refresh_interval_ms);
 
         let _coordinator = runtime.spawn(run_coordinator(
@@ -83,6 +96,7 @@ impl AppRuntime {
             session_factory,
             decoder_factory,
             Arc::clone(&latest_frame),
+            config.adb_path.clone(),
             refresh_interval,
             command_rx,
             event_tx,
@@ -107,7 +121,7 @@ impl AppRuntime {
     }
 
     pub fn take_latest_frame(&self) -> Option<Frame> {
-        self.latest_frame.lock().ok()?.take()
+        self.latest_frame.lock().ok()?.pending.take()
     }
 }
 
@@ -121,7 +135,8 @@ async fn run_coordinator(
     lister: Arc<dyn DeviceLister>,
     session_factory: Arc<dyn VideoSessionFactory>,
     decoder_factory: Arc<dyn VideoDecoderFactory>,
-    latest_frame: Arc<Mutex<Option<Frame>>>,
+    latest_frame: Arc<Mutex<LatestFrameStore>>,
+    adb_path: PathBuf,
     refresh_interval: Duration,
     mut command_rx: mpsc::UnboundedReceiver<RuntimeCommand>,
     event_tx: mpsc::UnboundedSender<RuntimeEvent>,
@@ -134,6 +149,7 @@ async fn run_coordinator(
     let mut automation_state = AutomationState::Stopped;
     let mut connection_state = ConnectionState::Disconnected;
     let mut video_worker_stop: Option<Arc<AtomicBool>> = None;
+    let mut input_queue: Option<InputQueue> = None;
 
     loop {
         tokio::select! {
@@ -145,16 +161,20 @@ async fn run_coordinator(
                     &mut selected_device,
                     &mut automation_state,
                     &mut connection_state,
+                    &mut input_queue,
                     video_worker_stop.as_ref(),
                 ).await;
             }
             worker_event = worker_event_rx.recv() => {
                 if let Some(worker_event) = worker_event {
                     match worker_event {
-                        VideoWorkerEvent::Progress(total_bytes) => {
+                        WorkerEvent::VideoProgress(total_bytes) => {
                             send_event(&event_tx, RuntimeEvent::VideoBytesReceived(total_bytes));
                         }
-                        VideoWorkerEvent::Ended(result) => {
+                        WorkerEvent::VideoEnded(result) => {
+                            if let Some(mut queue) = input_queue.take() {
+                                queue.stop();
+                            }
                             video_worker_stop = None;
                             automation_state = AutomationState::Stopped;
                             connection_state = ConnectionState::Disconnected;
@@ -170,12 +190,19 @@ async fn run_coordinator(
                                 send_event(&event_tx, RuntimeEvent::Error(message));
                             }
                         }
+                        WorkerEvent::InputExecuted(command) => {
+                            send_event(&event_tx, RuntimeEvent::InputExecuted(command));
+                        }
+                        WorkerEvent::InputFailed(message) => {
+                            send_event(&event_tx, RuntimeEvent::Error(message));
+                        }
                     }
                 }
             }
             command = command_rx.recv() => {
                 let Some(command) = command else {
                     request_video_stop(video_worker_stop.as_ref());
+                    request_input_stop(input_queue.as_mut());
                     break;
                 };
                 match command {
@@ -187,6 +214,7 @@ async fn run_coordinator(
                             &mut selected_device,
                             &mut automation_state,
                             &mut connection_state,
+                            &mut input_queue,
                             video_worker_stop.as_ref(),
                         ).await;
                     }
@@ -225,13 +253,44 @@ async fn run_coordinator(
                         };
 
                         connection_state = ConnectionState::Connecting;
+                        if let Ok(mut latest_frame) = latest_frame.lock() {
+                            *latest_frame = LatestFrameStore::default();
+                        }
                         send_event(
                             &event_tx,
                             RuntimeEvent::ConnectionStateChanged(connection_state),
                         );
                         let factory = Arc::clone(&session_factory);
-                        match tokio::task::spawn_blocking(move || factory.start(&serial)).await {
-                            Ok(Ok(session)) => {
+                        let session_serial = serial.clone();
+                        match tokio::task::spawn_blocking(move || factory.start(&session_serial)).await {
+                            Ok(Ok(mut session)) => {
+                                let controller: Arc<dyn InputController> = Arc::new(
+                                    AdbInputController::new(
+                                        AdbClient::new(adb_path.clone()),
+                                        serial,
+                                    ),
+                                );
+                                let queue = match InputQueue::spawn(
+                                    controller,
+                                    worker_event_tx.clone(),
+                                ) {
+                                    Ok(queue) => queue,
+                                    Err(error) => {
+                                        let _ = session.stop();
+                                        connection_state = ConnectionState::Disconnected;
+                                        send_event(
+                                            &event_tx,
+                                            RuntimeEvent::ConnectionStateChanged(connection_state),
+                                        );
+                                        send_event(
+                                            &event_tx,
+                                            RuntimeEvent::Error(format!(
+                                                "failed to start input worker: {error}"
+                                            )),
+                                        );
+                                        continue;
+                                    }
+                                };
                                 let stop = Arc::new(AtomicBool::new(false));
                                 spawn_video_worker(
                                     session,
@@ -240,6 +299,7 @@ async fn run_coordinator(
                                     Arc::clone(&stop),
                                     worker_event_tx.clone(),
                                 );
+                                input_queue = Some(queue);
                                 video_worker_stop = Some(stop);
                                 automation_state = AutomationState::Running;
                                 connection_state = ConnectionState::Connected;
@@ -280,10 +340,41 @@ async fn run_coordinator(
                                 &event_tx,
                                 RuntimeEvent::ConnectionStateChanged(connection_state),
                             );
+                            request_input_stop(input_queue.as_mut());
                             request_video_stop(video_worker_stop.as_ref());
                         }
                     }
+                    RuntimeCommand::SubmitInput(command) => {
+                        if connection_state != ConnectionState::Connected {
+                            send_event(
+                                &event_tx,
+                                RuntimeEvent::Error("input is available only while connected".to_owned()),
+                            );
+                            continue;
+                        }
+                        let (width, height) = latest_frame
+                            .lock()
+                            .ok()
+                            .and_then(|frame| frame.dimensions)
+                            .unwrap_or((0, 0));
+                        let Some(queue) = input_queue.as_ref() else {
+                            send_event(
+                                &event_tx,
+                                RuntimeEvent::Error("input worker is not running".to_owned()),
+                            );
+                            continue;
+                        };
+                        match queue.submit(command, width, height) {
+                            Ok(command) => {
+                                send_event(&event_tx, RuntimeEvent::InputQueued(command));
+                            }
+                            Err(message) => {
+                                send_event(&event_tx, RuntimeEvent::Error(message));
+                            }
+                        }
+                    }
                     RuntimeCommand::Shutdown => {
+                        request_input_stop(input_queue.as_mut());
                         request_video_stop(video_worker_stop.as_ref());
                         break;
                     }
@@ -300,6 +391,7 @@ async fn refresh_devices(
     selected_device: &mut Option<String>,
     automation_state: &mut AutomationState,
     connection_state: &mut ConnectionState,
+    input_queue: &mut Option<InputQueue>,
     video_worker_stop: Option<&Arc<AtomicBool>>,
 ) {
     let result = tokio::task::spawn_blocking(move || lister.list_devices()).await;
@@ -312,6 +404,7 @@ async fn refresh_devices(
             });
             if !selected_is_ready && selected_device.take().is_some() {
                 send_event(event_tx, RuntimeEvent::SelectedDeviceChanged(None));
+                request_input_stop(input_queue.as_mut());
                 request_video_stop(video_worker_stop);
                 if *automation_state == AutomationState::Running {
                     *automation_state = AutomationState::Stopped;
@@ -340,9 +433,9 @@ async fn refresh_devices(
 fn spawn_video_worker(
     mut session: Box<dyn ActiveVideoSession>,
     decoder_factory: Arc<dyn VideoDecoderFactory>,
-    latest_frame: Arc<Mutex<Option<Frame>>>,
+    latest_frame: Arc<Mutex<LatestFrameStore>>,
     stop: Arc<AtomicBool>,
-    worker_event_tx: mpsc::UnboundedSender<VideoWorkerEvent>,
+    worker_event_tx: mpsc::UnboundedSender<WorkerEvent>,
 ) {
     let _worker = tokio::task::spawn_blocking(move || {
         let mut buffer = vec![0_u8; VIDEO_BUFFER_SIZE];
@@ -351,7 +444,7 @@ fn spawn_video_worker(
             Ok(decoder) => decoder,
             Err(error) => {
                 let _ = session.stop();
-                let _ = worker_event_tx.send(VideoWorkerEvent::Ended(Err(error.to_string())));
+                let _ = worker_event_tx.send(WorkerEvent::VideoEnded(Err(error.to_string())));
                 return;
             }
         };
@@ -363,7 +456,7 @@ fn spawn_video_worker(
                 Ok(0) => break Ok(()),
                 Ok(bytes_read) => {
                     total_bytes = total_bytes.saturating_add(bytes_read as u64);
-                    let _ = worker_event_tx.send(VideoWorkerEvent::Progress(total_bytes));
+                    let _ = worker_event_tx.send(WorkerEvent::VideoProgress(total_bytes));
                     if let Err(error) = decoder.push(&buffer[..bytes_read]) {
                         break Err(error.to_string());
                     }
@@ -377,13 +470,13 @@ fn spawn_video_worker(
         };
 
         let result = result.and_then(|()| session.stop().map_err(|error| error.to_string()));
-        let _ = worker_event_tx.send(VideoWorkerEvent::Ended(result));
+        let _ = worker_event_tx.send(WorkerEvent::VideoEnded(result));
     });
 }
 
 fn store_decoded_frames(
     decoder: &mut dyn VideoDecoder,
-    latest_frame: &Mutex<Option<Frame>>,
+    latest_frame: &Mutex<LatestFrameStore>,
 ) -> Result<(), String> {
     while let Some(frame) = decoder
         .try_next_frame()
@@ -392,9 +485,101 @@ fn store_decoded_frames(
         let mut slot = latest_frame
             .lock()
             .map_err(|_| "latest frame store is unavailable".to_owned())?;
-        *slot = Some(frame);
+        slot.dimensions = Some((frame.width(), frame.height()));
+        slot.pending = Some(frame);
     }
     Ok(())
+}
+
+struct InputQueue {
+    command_tx: Option<std_mpsc::SyncSender<PixelInputCommand>>,
+    stop: Arc<AtomicBool>,
+    worker: Option<JoinHandle<()>>,
+}
+
+impl InputQueue {
+    fn spawn(
+        controller: Arc<dyn InputController>,
+        worker_event_tx: mpsc::UnboundedSender<WorkerEvent>,
+    ) -> Result<Self, std::io::Error> {
+        let (command_tx, command_rx) = std_mpsc::sync_channel(INPUT_QUEUE_SIZE);
+        let stop = Arc::new(AtomicBool::new(false));
+        let worker_stop = Arc::clone(&stop);
+        let worker = thread::Builder::new()
+            .name("better-e7-input".to_owned())
+            .spawn(move || {
+                while !worker_stop.load(Ordering::Acquire) {
+                    match command_rx.recv_timeout(Duration::from_millis(50)) {
+                        Ok(command) => {
+                            if worker_stop.load(Ordering::Acquire) {
+                                break;
+                            }
+                            match controller.submit(command) {
+                                Ok(()) => {
+                                    let _ = worker_event_tx
+                                        .send(WorkerEvent::InputExecuted(command));
+                                }
+                                Err(error) => {
+                                    let _ = worker_event_tx
+                                        .send(WorkerEvent::InputFailed(error.to_string()));
+                                }
+                            }
+                        }
+                        Err(std_mpsc::RecvTimeoutError::Timeout) => {}
+                        Err(std_mpsc::RecvTimeoutError::Disconnected) => break,
+                    }
+                }
+            })?;
+
+        Ok(Self {
+            command_tx: Some(command_tx),
+            stop,
+            worker: Some(worker),
+        })
+    }
+
+    fn submit(
+        &self,
+        command: InputCommand,
+        width: u32,
+        height: u32,
+    ) -> Result<PixelInputCommand, String> {
+        if self.stop.load(Ordering::Acquire) {
+            return Err("input queue has stopped".to_owned());
+        }
+        let command = command
+            .to_pixels(width, height)
+            .map_err(|error| error.to_string())?;
+        let sender = self
+            .command_tx
+            .as_ref()
+            .ok_or_else(|| "input queue has stopped".to_owned())?;
+        sender.try_send(command).map_err(|error| match error {
+            std_mpsc::TrySendError::Full(_) => "input queue is full".to_owned(),
+            std_mpsc::TrySendError::Disconnected(_) => {
+                "input queue worker has stopped".to_owned()
+            }
+        })?;
+        Ok(command)
+    }
+
+    fn request_stop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        self.command_tx.take();
+    }
+
+    fn stop(&mut self) {
+        self.request_stop();
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+}
+
+impl Drop for InputQueue {
+    fn drop(&mut self) {
+        self.stop();
+    }
 }
 
 fn request_video_stop(stop: Option<&Arc<AtomicBool>>) {
@@ -403,13 +588,21 @@ fn request_video_stop(stop: Option<&Arc<AtomicBool>>) {
     }
 }
 
+fn request_input_stop(queue: Option<&mut InputQueue>) {
+    if let Some(queue) = queue {
+        queue.request_stop();
+    }
+}
+
 fn send_event(event_tx: &mpsc::UnboundedSender<RuntimeEvent>, event: RuntimeEvent) {
     let _ = event_tx.send(event);
 }
 
-enum VideoWorkerEvent {
-    Progress(u64),
-    Ended(Result<(), String>),
+enum WorkerEvent {
+    VideoProgress(u64),
+    VideoEnded(Result<(), String>),
+    InputExecuted(PixelInputCommand),
+    InputFailed(String),
 }
 
 #[derive(Debug)]
@@ -438,15 +631,25 @@ impl Error for RuntimeError {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::VecDeque, time::Instant};
+    use std::{
+        collections::VecDeque,
+        sync::mpsc::{Receiver, Sender},
+        time::Instant,
+    };
 
-    use better_e7_core::PixelFormat;
+    use better_e7_core::{InputError, PixelFormat};
     use better_e7_video::VideoDecodeError;
 
     use super::*;
 
     struct MockDecoder {
         frames: VecDeque<Frame>,
+    }
+
+    struct BlockingInputController {
+        commands: Mutex<Vec<PixelInputCommand>>,
+        started_tx: Sender<()>,
+        release_rx: Mutex<Receiver<()>>,
     }
 
     impl VideoDecoder for MockDecoder {
@@ -459,6 +662,15 @@ mod tests {
         }
     }
 
+    impl InputController for BlockingInputController {
+        fn submit(&self, command: PixelInputCommand) -> Result<(), InputError> {
+            self.commands.lock().unwrap().push(command);
+            let _ = self.started_tx.send(());
+            let _ = self.release_rx.lock().unwrap().recv();
+            Ok(())
+        }
+    }
+
     #[test]
     fn keeps_only_the_latest_decoded_frame() {
         let frames = [1_u64, 2]
@@ -466,10 +678,51 @@ mod tests {
             .map(|id| Frame::new(id, Instant::now(), 1, 1, PixelFormat::Rgb8, vec![0; 3]).unwrap())
             .collect();
         let mut decoder = MockDecoder { frames };
-        let latest = Mutex::new(None);
+        let latest = Mutex::new(LatestFrameStore::default());
 
         store_decoded_frames(&mut decoder, &latest).unwrap();
 
-        assert_eq!(latest.lock().unwrap().as_ref().unwrap().id(), 2);
+        let latest = latest.lock().unwrap();
+        assert_eq!(latest.pending.as_ref().unwrap().id(), 2);
+        assert_eq!(latest.dimensions, Some((1, 1)));
+    }
+
+    #[test]
+    fn discards_queued_input_when_stopped() {
+        let (started_tx, started_rx) = std_mpsc::channel();
+        let (release_tx, release_rx) = std_mpsc::channel();
+        let controller = Arc::new(BlockingInputController {
+            commands: Mutex::new(Vec::new()),
+            started_tx,
+            release_rx: Mutex::new(release_rx),
+        });
+        let (worker_event_tx, _worker_event_rx) = mpsc::unbounded_channel();
+        let mut queue = InputQueue::spawn(controller.clone(), worker_event_tx).unwrap();
+
+        queue
+            .submit(
+                InputCommand::Key {
+                    android_key_code: 3,
+                },
+                0,
+                0,
+            )
+            .unwrap();
+        queue
+            .submit(
+                InputCommand::Key {
+                    android_key_code: 4,
+                },
+                0,
+                0,
+            )
+            .unwrap();
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+
+        queue.request_stop();
+        release_tx.send(()).unwrap();
+        queue.stop();
+
+        assert_eq!(controller.commands.lock().unwrap().len(), 1);
     }
 }

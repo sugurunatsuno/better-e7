@@ -10,6 +10,9 @@ Android端末が必要な確認と、通常の自動テストを分けます。
 - H.264 Annex Bはchunk境界を変えたbyte列で検証する
 - push / forward / server起動 / connect / stop / forward削除の順序を検証する
 - 接続途中で失敗した場合の後片付けを検証する
+- 正規化座標からpixel座標への変換を検証する
+- ADB tap / swipe / keyのargumentをmock runnerで検証する
+- 入力停止時に未実行のqueueが破棄されることを検証する
 
 このテストはUbuntu CIで実行し、ADB / scrcpy-server / FFmpegを必要としません。
 
@@ -20,7 +23,10 @@ Android端末が必要な確認と、通常の自動テストを分けます。
 - GUIにADB端末が表示される
 - 選択した端末だけへscrcpy-serverがpushされる
 - 開始後に受信量が増える
+- Android映像がpreviewへ表示される
+- previewをclickした位置が端末でtapされる
+- Home / Backボタンが選択した端末だけへ送られる
+- 上へswipeボタンで下から上へのswipeが送られる
 - 停止後にADB forwardが削除される
+- 停止後に入力が送信されない
 - USBを抜いた場合にsessionが停止する
-
-映像表示はFFmpeg decoderを追加した後に確認します。現時点のGUIはH.264の受信量だけを表示します。

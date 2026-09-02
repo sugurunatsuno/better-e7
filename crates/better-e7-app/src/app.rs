@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use better_e7_adb::AdbDevice;
 use better_e7_config::AppConfig;
-use better_e7_core::{Frame, PixelFormat};
+use better_e7_core::{Frame, InputCommand, NormalizedPoint, PixelFormat, PixelInputCommand};
 use better_e7_runtime::{
     AppRuntime, AutomationState, ConnectionState, RuntimeCommand, RuntimeEvent,
 };
@@ -98,6 +98,10 @@ impl BetterE7App {
                 RuntimeEvent::VideoBytesReceived(total_bytes) => {
                     self.video_bytes_received = total_bytes;
                 }
+                RuntimeEvent::InputQueued(_) => {}
+                RuntimeEvent::InputExecuted(command) => {
+                    self.push_log(format!("入力を実行しました: {}", describe_input(command)));
+                }
                 RuntimeEvent::Error(message) => {
                     error!(%message, "runtime error");
                     self.push_log(format!("エラー: {message}"));
@@ -189,6 +193,7 @@ impl BetterE7App {
     }
 
     fn show_devices(&mut self, context: &egui::Context) {
+        let mut input_command = None;
         egui::SidePanel::left("devices")
             .resizable(true)
             .default_width(260.0)
@@ -232,19 +237,60 @@ impl BetterE7App {
                 }
 
                 ui.separator();
+                ui.heading("入力");
+                let input_enabled = self.connection_state == ConnectionState::Connected;
+                ui.horizontal(|ui| {
+                    if ui
+                        .add_enabled(input_enabled, egui::Button::new("Home"))
+                        .clicked()
+                    {
+                        input_command = Some(InputCommand::Key {
+                            android_key_code: 3,
+                        });
+                    }
+                    if ui
+                        .add_enabled(input_enabled, egui::Button::new("Back"))
+                        .clicked()
+                    {
+                        input_command = Some(InputCommand::Key {
+                            android_key_code: 4,
+                        });
+                    }
+                });
+                if ui
+                    .add_enabled(input_enabled, egui::Button::new("上へswipe"))
+                    .clicked()
+                    && let (Ok(from), Ok(to)) = (
+                        NormalizedPoint::new(0.5, 0.8),
+                        NormalizedPoint::new(0.5, 0.2),
+                    )
+                {
+                    input_command = Some(InputCommand::Swipe {
+                        from,
+                        to,
+                        duration: Duration::from_millis(300),
+                    });
+                }
+                ui.label("previewをclickすると端末をtapします");
+
+                ui.separator();
                 ui.heading("タスク");
                 ui.label("ゲームプラグインは未実装です");
             });
+        if let Some(command) = input_command {
+            self.send(RuntimeCommand::SubmitInput(command));
+        }
     }
 
-    fn show_preview(&self, context: &egui::Context) {
+    fn show_preview(&mut self, context: &egui::Context) {
+        let mut input_command = None;
         egui::CentralPanel::default().show(context, |ui| {
             ui.heading("プレビュー");
             let available = ui.available_size();
             let preview_height = (available.y - 120.0).max(160.0);
-            let (rect, _) = ui.allocate_exact_size(
+            let (rect, response) = ui.allocate_exact_size(
                 egui::vec2(available.x, preview_height),
-                egui::Sense::hover(),
+                egui::Sense::click(),
             );
             ui.painter()
                 .rect_filled(rect, 6.0, egui::Color32::from_gray(24));
@@ -258,6 +304,17 @@ impl BetterE7App {
                     egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
                     egui::Color32::WHITE,
                 );
+                if self.connection_state == ConnectionState::Connected
+                    && response.clicked()
+                    && let Some(position) = response.interact_pointer_pos()
+                    && image_rect.contains(position)
+                {
+                    let x = (position.x - image_rect.min.x) / image_rect.width();
+                    let y = (position.y - image_rect.min.y) / image_rect.height();
+                    if let Ok(point) = NormalizedPoint::new(x, y) {
+                        input_command = Some(InputCommand::Tap { point });
+                    }
+                }
             } else {
                 let preview_message = match self.connection_state {
                     ConnectionState::Disconnected => "Android映像は未接続です",
@@ -288,6 +345,9 @@ impl BetterE7App {
             ui.label(format!("映像解像度: {resolution}"));
             ui.label("ゲーム状態: Unknown");
         });
+        if let Some(command) = input_command {
+            self.send(RuntimeCommand::SubmitInput(command));
+        }
     }
 
     fn show_logs(&self, context: &egui::Context) {
@@ -304,6 +364,25 @@ impl BetterE7App {
                         }
                     });
             });
+    }
+}
+
+fn describe_input(command: PixelInputCommand) -> String {
+    match command {
+        PixelInputCommand::Tap { x, y } => format!("tap {x} {y}"),
+        PixelInputCommand::Swipe {
+            from_x,
+            from_y,
+            to_x,
+            to_y,
+            duration,
+        } => format!(
+            "swipe {from_x} {from_y} {to_x} {to_y} {}ms",
+            duration.as_millis()
+        ),
+        PixelInputCommand::Key { android_key_code } => {
+            format!("keyevent {android_key_code}")
+        }
     }
 }
 
