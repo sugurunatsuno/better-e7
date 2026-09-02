@@ -10,8 +10,7 @@ publish = false
 [dependencies]
 better-e7-adb = { path = "../better-e7-adb" }
 better-e7-config = { path = "../better-e7-config" }
-tokio = { version = "1", features = ["rt-multi-thread", "sync", "time"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
 
 [lints]
 workspace = true
-
