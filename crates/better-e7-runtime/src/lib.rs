@@ -91,12 +91,15 @@ impl AppRuntime {
         let latest_frame = Arc::new(Mutex::new(LatestFrameStore::default()));
         let refresh_interval = Duration::from_millis(config.device_refresh_interval_ms);
 
-        let _coordinator = runtime.spawn(run_coordinator(
+        let resources = CoordinatorResources {
             lister,
             session_factory,
             decoder_factory,
-            Arc::clone(&latest_frame),
-            config.adb_path.clone(),
+            latest_frame: Arc::clone(&latest_frame),
+            adb_path: config.adb_path.clone(),
+        };
+        let _coordinator = runtime.spawn(run_coordinator(
+            resources,
             refresh_interval,
             command_rx,
             event_tx,
@@ -131,16 +134,27 @@ impl Drop for AppRuntime {
     }
 }
 
-async fn run_coordinator(
+struct CoordinatorResources {
     lister: Arc<dyn DeviceLister>,
     session_factory: Arc<dyn VideoSessionFactory>,
     decoder_factory: Arc<dyn VideoDecoderFactory>,
     latest_frame: Arc<Mutex<LatestFrameStore>>,
     adb_path: PathBuf,
+}
+
+async fn run_coordinator(
+    resources: CoordinatorResources,
     refresh_interval: Duration,
     mut command_rx: mpsc::UnboundedReceiver<RuntimeCommand>,
     event_tx: mpsc::UnboundedSender<RuntimeEvent>,
 ) {
+    let CoordinatorResources {
+        lister,
+        session_factory,
+        decoder_factory,
+        latest_frame,
+        adb_path,
+    } = resources;
     let mut interval = tokio::time::interval(refresh_interval);
     interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
     let (worker_event_tx, mut worker_event_rx) = mpsc::unbounded_channel();
@@ -157,12 +171,14 @@ async fn run_coordinator(
                 refresh_devices(
                     Arc::clone(&lister),
                     &event_tx,
-                    &mut devices,
-                    &mut selected_device,
-                    &mut automation_state,
-                    &mut connection_state,
-                    &mut input_queue,
-                    video_worker_stop.as_ref(),
+                    DeviceRefreshState {
+                        devices: &mut devices,
+                        selected_device: &mut selected_device,
+                        automation_state: &mut automation_state,
+                        connection_state: &mut connection_state,
+                        input_queue: &mut input_queue,
+                        video_worker_stop: video_worker_stop.as_ref(),
+                    },
                 ).await;
             }
             worker_event = worker_event_rx.recv() => {
@@ -210,12 +226,14 @@ async fn run_coordinator(
                         refresh_devices(
                             Arc::clone(&lister),
                             &event_tx,
-                            &mut devices,
-                            &mut selected_device,
-                            &mut automation_state,
-                            &mut connection_state,
-                            &mut input_queue,
-                            video_worker_stop.as_ref(),
+                            DeviceRefreshState {
+                                devices: &mut devices,
+                                selected_device: &mut selected_device,
+                                automation_state: &mut automation_state,
+                                connection_state: &mut connection_state,
+                                input_queue: &mut input_queue,
+                                video_worker_stop: video_worker_stop.as_ref(),
+                            },
                         ).await;
                     }
                     RuntimeCommand::SelectDevice(serial) => {
@@ -384,43 +402,47 @@ async fn run_coordinator(
     }
 }
 
+struct DeviceRefreshState<'a> {
+    devices: &'a mut Vec<AdbDevice>,
+    selected_device: &'a mut Option<String>,
+    automation_state: &'a mut AutomationState,
+    connection_state: &'a mut ConnectionState,
+    input_queue: &'a mut Option<InputQueue>,
+    video_worker_stop: Option<&'a Arc<AtomicBool>>,
+}
+
 async fn refresh_devices(
     lister: Arc<dyn DeviceLister>,
     event_tx: &mpsc::UnboundedSender<RuntimeEvent>,
-    devices: &mut Vec<AdbDevice>,
-    selected_device: &mut Option<String>,
-    automation_state: &mut AutomationState,
-    connection_state: &mut ConnectionState,
-    input_queue: &mut Option<InputQueue>,
-    video_worker_stop: Option<&Arc<AtomicBool>>,
+    mut state: DeviceRefreshState<'_>,
 ) {
     let result = tokio::task::spawn_blocking(move || lister.list_devices()).await;
     match result {
         Ok(Ok(updated_devices)) => {
-            let selected_is_ready = selected_device.as_ref().is_some_and(|serial| {
+            let selected_is_ready = state.selected_device.as_ref().is_some_and(|serial| {
                 updated_devices
                     .iter()
                     .any(|device| &device.serial == serial && device.is_ready())
             });
-            if !selected_is_ready && selected_device.take().is_some() {
+            if !selected_is_ready && state.selected_device.take().is_some() {
                 send_event(event_tx, RuntimeEvent::SelectedDeviceChanged(None));
-                request_input_stop(input_queue.as_mut());
-                request_video_stop(video_worker_stop);
-                if *automation_state == AutomationState::Running {
-                    *automation_state = AutomationState::Stopped;
-                    *connection_state = ConnectionState::Disconnecting;
+                request_input_stop(state.input_queue.as_mut());
+                request_video_stop(state.video_worker_stop);
+                if *state.automation_state == AutomationState::Running {
+                    *state.automation_state = AutomationState::Stopped;
+                    *state.connection_state = ConnectionState::Disconnecting;
                     send_event(
                         event_tx,
-                        RuntimeEvent::AutomationStateChanged(*automation_state),
+                        RuntimeEvent::AutomationStateChanged(*state.automation_state),
                     );
                     send_event(
                         event_tx,
-                        RuntimeEvent::ConnectionStateChanged(*connection_state),
+                        RuntimeEvent::ConnectionStateChanged(*state.connection_state),
                     );
                 }
             }
-            *devices = updated_devices;
-            send_event(event_tx, RuntimeEvent::DevicesUpdated(devices.clone()));
+            *state.devices = updated_devices;
+            send_event(event_tx, RuntimeEvent::DevicesUpdated(state.devices.clone()));
         }
         Ok(Err(error)) => send_event(event_tx, RuntimeEvent::Error(error.to_string())),
         Err(error) => send_event(
