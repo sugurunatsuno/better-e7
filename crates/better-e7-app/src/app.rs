@@ -53,8 +53,7 @@ impl BetterE7App {
 
         match AppRuntime::new(&config) {
             Ok(runtime) => {
-                app.automation_profile_name =
-                    runtime.automation_profile_name().map(str::to_owned);
+                app.automation_profile_name = runtime.automation_profile_name().map(str::to_owned);
                 app.runtime = Some(runtime);
                 app.push_log("ADB端末の監視を開始しました");
                 if let Some(profile_name) = app.automation_profile_name.clone() {

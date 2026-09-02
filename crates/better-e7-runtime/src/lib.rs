@@ -963,7 +963,10 @@ impl fmt::Display for RuntimeError {
         match self {
             Self::Build(error) => write!(formatter, "failed to build runtime: {error}"),
             Self::AutomationProfile(message) => {
-                write!(formatter, "failed to configure automation profile: {message}")
+                write!(
+                    formatter,
+                    "failed to configure automation profile: {message}"
+                )
             }
             Self::Recognition(message) => {
                 write!(formatter, "failed to configure recognition: {message}")
@@ -1155,15 +1158,7 @@ mod tests {
         };
 
         let mut automation = build_automation(&config).unwrap();
-        let frame = Frame::new(
-            1,
-            Instant::now(),
-            1,
-            1,
-            PixelFormat::Rgb8,
-            vec![0; 3],
-        )
-        .unwrap();
+        let frame = Frame::new(1, Instant::now(), 1, 1, PixelFormat::Rgb8, vec![0; 3]).unwrap();
         let detections = automation
             .recognizer
             .as_ref()

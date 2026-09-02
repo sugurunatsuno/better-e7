@@ -418,7 +418,10 @@ mod tests {
             templates: vec![template.clone(), template],
             rules: Vec::new(),
         };
-        assert!(matches!(duplicate.validate(), Err(ProfileError::Invalid(_))));
+        assert!(matches!(
+            duplicate.validate(),
+            Err(ProfileError::Invalid(_))
+        ));
 
         let invalid_region = AutomationProfile {
             name: "invalid-region".to_owned(),

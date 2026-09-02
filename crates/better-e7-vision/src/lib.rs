@@ -371,21 +371,11 @@ mod tests {
     fn combines_detections_from_multiple_recognizers() {
         let red = rgb_frame(1, 1, vec![255, 0, 0]);
         let green = rgb_frame(1, 1, vec![0, 255, 0]);
-        let frame = rgb_frame(
-            2,
-            1,
-            vec![
-                255, 0, 0,
-                0, 255, 0,
-            ],
-        );
+        let frame = rgb_frame(2, 1, vec![255, 0, 0, 0, 255, 0]);
         let mut recognizers = RecognizerSet::new();
-        recognizers.add(
-            TemplateMatcher::new("red", red, 0.99, NormalizedRect::full()).unwrap(),
-        );
-        recognizers.add(
-            TemplateMatcher::new("green", green, 0.99, NormalizedRect::full()).unwrap(),
-        );
+        recognizers.add(TemplateMatcher::new("red", red, 0.99, NormalizedRect::full()).unwrap());
+        recognizers
+            .add(TemplateMatcher::new("green", green, 0.99, NormalizedRect::full()).unwrap());
 
         let detections = recognizers.recognize(&frame).unwrap();
 
