@@ -33,6 +33,8 @@ Android端末が必要な確認と、通常の自動テストを分けます。
 - tap_detectionが最もconfidenceの高い検出位置を使うことを検証する
 - templateなしのprofileをmock Frameで認識し、Rule engineが入力を生成することを検証する
 - dry-runでは入力queueがなくても予定入力を生成し、InputControllerを呼ばないことを検証する
+- PNG / JPEGを名前順に読み、認識 / Rule engine / 予定入力を実機なしで通すことを検証する
+- オフライン実行でも履歴へRuleと予定入力を順番に保存することを検証する
 - 実行履歴を発生順のJSONLとして保存できることを検証する
 - JSONLのprofile / Rule / event / session経過時間 / 入力内容を検証する
 

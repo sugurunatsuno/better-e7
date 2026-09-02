@@ -43,6 +43,7 @@
 - [x] runtimeの認識結果と入力queueへ接続する
 - [x] GUIでprofileの選択 / 開始 / 停止を操作できるようにする
 - [x] dry-runを作る
+- [x] 保存Frame列を使うオフライン実行を作る
 - [ ] rule editorを作る
 - [x] 実行履歴をJSONLへ保存できるようにする
 

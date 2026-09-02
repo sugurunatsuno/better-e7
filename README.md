@@ -2,7 +2,7 @@
 
 Androidゲームの映像取得 / 認識 / 操作 / タスク実行を、macOS / Windows / Linuxで共通化する自動化基盤です。
 
-現在は映像preview / ADB入力 / 複数template認識 / 汎用AutomationProfileから入力queueまでの実行経路 / profile再読み込み / dry-run / JSONL実行履歴 / ゲーム拡張APIまで実装しています。Rustとeguiを使い、Androidとの接続はADBと固定versionのscrcpy-serverを使います。
+現在は映像preview / ADB入力 / 複数template認識 / 汎用AutomationProfileから入力queueまでの実行経路 / profile再読み込み / dry-run / 保存Frame列のオフライン実行 / JSONL実行履歴 / ゲーム拡張APIまで実装しています。Rustとeguiを使い、Androidとの接続はADBと固定versionのscrcpy-serverを使います。
 
 ## 目標
 

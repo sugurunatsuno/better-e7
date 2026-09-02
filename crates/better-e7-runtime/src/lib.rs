@@ -1,7 +1,7 @@
 use std::{
     error::Error,
     fmt,
-    fs::OpenOptions,
+    fs::{self, OpenOptions},
     io::{BufWriter, Write},
     path::{Path, PathBuf},
     sync::{
@@ -19,9 +19,10 @@ use better_e7_automation::{AutomationEngine, AutomationInput, AutomationProfile}
 use better_e7_config::AppConfig;
 use better_e7_core::{
     Detection, Frame, InputCommand, InputController, NormalizedRect, PixelInputCommand, Recognizer,
+    VideoSource,
 };
 use better_e7_video::{FfmpegProcessDecoderFactory, VideoDecoder, VideoDecoderFactory};
-use better_e7_vision::{RecognizerSet, TemplateMatcher};
+use better_e7_vision::{ImageSequenceSource, RecognizerSet, TemplateMatcher};
 use serde::Serialize;
 use tokio::{
     runtime::{Builder, Runtime},
@@ -32,6 +33,7 @@ use tokio::{
 const VIDEO_BUFFER_SIZE: usize = 64 * 1_024;
 const INPUT_QUEUE_SIZE: usize = 64;
 const HISTORY_QUEUE_SIZE: usize = 256;
+const OFFLINE_FRAME_INTERVAL: Duration = Duration::from_millis(100);
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum RuntimeCommand {
@@ -41,6 +43,12 @@ pub enum RuntimeCommand {
     SetAutomationDryRun(bool),
     StartAutomation,
     StopAutomation,
+    StartOfflineAutomation {
+        profile_path: PathBuf,
+        frames_directory: PathBuf,
+        history_path: Option<PathBuf>,
+    },
+    StopOfflineAutomation,
     SubmitInput(InputCommand),
     Shutdown,
 }
@@ -80,7 +88,47 @@ pub enum RuntimeEvent {
         rule_id: String,
         command: InputCommand,
     },
+    OfflineAutomationStarted,
+    OfflineAutomationFinished {
+        processed_frames: usize,
+        stopped: bool,
+    },
     Error(String),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum OfflineAutomationEvent {
+    RuleFired(String),
+    Log(String),
+    InputPlanned {
+        rule_id: String,
+        command: InputCommand,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub struct OfflineAutomationReport {
+    pub profile_name: String,
+    pub processed_frames: usize,
+    pub stopped: bool,
+    pub last_frame: Option<Frame>,
+    pub last_detections: Vec<Detection>,
+    pub events: Vec<OfflineAutomationEvent>,
+}
+
+#[derive(Debug, Clone)]
+pub struct OfflineAutomationOptions {
+    pub frame_interval: Duration,
+    pub history_path: Option<PathBuf>,
+}
+
+impl Default for OfflineAutomationOptions {
+    fn default() -> Self {
+        Self {
+            frame_interval: OFFLINE_FRAME_INTERVAL,
+            history_path: None,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -267,6 +315,183 @@ fn resolve_profile_asset(profile_path: &Path, asset_path: &Path) -> PathBuf {
     }
 }
 
+pub fn discover_offline_frames(directory: impl AsRef<Path>) -> Result<Vec<PathBuf>, RuntimeError> {
+    let directory = directory.as_ref();
+    let entries = fs::read_dir(directory).map_err(|error| {
+        RuntimeError::Offline(format!(
+            "failed to read offline frame directory {}: {error}",
+            directory.display()
+        ))
+    })?;
+    let mut paths = entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.is_file() && is_supported_image(path))
+        .collect::<Vec<_>>();
+    paths.sort();
+    if paths.is_empty() {
+        return Err(RuntimeError::Offline(format!(
+            "offline frame directory contains no PNG or JPEG images: {}",
+            directory.display()
+        )));
+    }
+    Ok(paths)
+}
+
+fn is_supported_image(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            extension.eq_ignore_ascii_case("png")
+                || extension.eq_ignore_ascii_case("jpg")
+                || extension.eq_ignore_ascii_case("jpeg")
+        })
+}
+
+pub fn run_offline_automation(
+    profile_path: impl AsRef<Path>,
+    frame_paths: &[PathBuf],
+    options: OfflineAutomationOptions,
+) -> Result<OfflineAutomationReport, RuntimeError> {
+    run_offline_automation_with_stop(profile_path.as_ref(), frame_paths, options, None)
+}
+
+fn run_offline_automation_with_stop(
+    profile_path: &Path,
+    frame_paths: &[PathBuf],
+    options: OfflineAutomationOptions,
+    stop: Option<&AtomicBool>,
+) -> Result<OfflineAutomationReport, RuntimeError> {
+    if frame_paths.is_empty() {
+        return Err(RuntimeError::Offline(
+            "offline automation requires at least one frame".to_owned(),
+        ));
+    }
+
+    let BuiltAutomation {
+        recognizer,
+        engine,
+        profile_name,
+    } = build_profile_automation(profile_path)?;
+    let recognizer = recognizer.expect("profile automation always has a recognizer");
+    let mut engine = engine.expect("profile automation always has an engine");
+    let profile_name = profile_name.expect("profile automation always has a name");
+    engine.reset();
+
+    let (history_event_tx, mut history_event_rx) = mpsc::unbounded_channel();
+    let mut history_writer = options
+        .history_path
+        .map(|path| AutomationHistoryWriter::spawn(path, history_event_tx))
+        .transpose()
+        .map_err(|error| RuntimeError::Offline(format!("failed to start history writer: {error}")))?;
+    let mut source = ImageSequenceSource::new(frame_paths.iter().cloned());
+    source
+        .start()
+        .map_err(|error| RuntimeError::Offline(error.to_string()))?;
+
+    let result = (|| {
+        let mut report = OfflineAutomationReport {
+            profile_name: profile_name.clone(),
+            processed_frames: 0,
+            stopped: false,
+            last_frame: None,
+            last_detections: Vec::new(),
+            events: Vec::new(),
+        };
+
+        loop {
+            if stop.is_some_and(|stop| stop.load(Ordering::Acquire)) {
+                report.stopped = true;
+                break;
+            }
+            let Some(frame) = source
+                .try_latest_frame()
+                .map_err(|error| RuntimeError::Offline(error.to_string()))?
+            else {
+                break;
+            };
+            let elapsed = options.frame_interval.saturating_mul(
+                report
+                    .processed_frames
+                    .try_into()
+                    .unwrap_or(u32::MAX),
+            );
+            let detections = recognizer
+                .recognize(&frame)
+                .map_err(|error| RuntimeError::Offline(error.to_string()))?;
+            let automation = engine
+                .tick(&detections, elapsed)
+                .map_err(|error| RuntimeError::Offline(error.to_string()))?;
+
+            for rule_id in automation.fired_rules {
+                submit_offline_history(
+                    history_writer.as_ref(),
+                    AutomationHistoryRecord::new(
+                        Some(&profile_name),
+                        Some(elapsed),
+                        &rule_id,
+                        AutomationHistoryEvent::RuleFired,
+                        None,
+                    ),
+                )?;
+                report
+                    .events
+                    .push(OfflineAutomationEvent::RuleFired(rule_id));
+            }
+            for message in automation.logs {
+                report.events.push(OfflineAutomationEvent::Log(message));
+            }
+            if let Some(input) = automation.input {
+                submit_offline_history(
+                    history_writer.as_ref(),
+                    AutomationHistoryRecord::new(
+                        Some(&profile_name),
+                        Some(elapsed),
+                        &input.rule_id,
+                        AutomationHistoryEvent::InputPlanned,
+                        Some(describe_normalized_input(&input.command)),
+                    ),
+                )?;
+                report.events.push(OfflineAutomationEvent::InputPlanned {
+                    rule_id: input.rule_id,
+                    command: input.command,
+                });
+            }
+
+            report.processed_frames = report.processed_frames.saturating_add(1);
+            report.last_detections = detections;
+            report.last_frame = Some(frame);
+        }
+        Ok(report)
+    })();
+
+    let stop_result = source
+        .stop()
+        .map_err(|error| RuntimeError::Offline(error.to_string()));
+    if let Some(writer) = history_writer.as_mut() {
+        writer.stop();
+    }
+    while let Ok(event) = history_event_rx.try_recv() {
+        if let WorkerEvent::HistoryFailed(message) = event {
+            return Err(RuntimeError::Offline(message));
+        }
+    }
+    stop_result?;
+    result
+}
+
+fn submit_offline_history(
+    writer: Option<&AutomationHistoryWriter>,
+    record: AutomationHistoryRecord,
+) -> Result<(), RuntimeError> {
+    if let Some(writer) = writer {
+        writer
+            .submit(record)
+            .map_err(|message| RuntimeError::Offline(format!("failed to save history: {message}")))?;
+    }
+    Ok(())
+}
+
 async fn run_coordinator(
     resources: CoordinatorResources,
     refresh_interval: Duration,
@@ -308,6 +533,7 @@ async fn run_coordinator(
     let mut input_queue: Option<InputQueue> = None;
     let mut recognition_worker: Option<RecognitionWorker> = None;
     let mut automation_started_at: Option<Instant> = None;
+    let mut offline_worker_stop: Option<Arc<AtomicBool>> = None;
 
     loop {
         tokio::select! {
@@ -464,6 +690,69 @@ async fn run_coordinator(
                         WorkerEvent::RecognitionFailed(message) => {
                             send_event(&event_tx, RuntimeEvent::Error(message));
                         }
+                        WorkerEvent::OfflineEnded(result) => {
+                            offline_worker_stop = None;
+                            match result {
+                                Ok(mut report) => {
+                                    if let Some(frame) = report.last_frame.take()
+                                        && let Ok(mut latest_frame) = latest_frame.lock()
+                                    {
+                                        latest_frame.dimensions =
+                                            Some((frame.width(), frame.height()));
+                                        latest_frame.pending = Some(frame);
+                                    }
+                                    send_event(
+                                        &event_tx,
+                                        RuntimeEvent::DetectionsUpdated(report.last_detections),
+                                    );
+                                    for event in report.events {
+                                        match event {
+                                            OfflineAutomationEvent::RuleFired(rule_id) => {
+                                                send_event(
+                                                    &event_tx,
+                                                    RuntimeEvent::AutomationRuleFired(rule_id),
+                                                );
+                                            }
+                                            OfflineAutomationEvent::Log(message) => {
+                                                send_event(
+                                                    &event_tx,
+                                                    RuntimeEvent::AutomationLog(message),
+                                                );
+                                            }
+                                            OfflineAutomationEvent::InputPlanned {
+                                                rule_id,
+                                                command,
+                                            } => {
+                                                send_event(
+                                                    &event_tx,
+                                                    RuntimeEvent::AutomationInputPlanned {
+                                                        rule_id,
+                                                        command,
+                                                    },
+                                                );
+                                            }
+                                        }
+                                    }
+                                    send_event(
+                                        &event_tx,
+                                        RuntimeEvent::OfflineAutomationFinished {
+                                            processed_frames: report.processed_frames,
+                                            stopped: report.stopped,
+                                        },
+                                    );
+                                }
+                                Err(message) => {
+                                    send_event(
+                                        &event_tx,
+                                        RuntimeEvent::OfflineAutomationFinished {
+                                            processed_frames: 0,
+                                            stopped: false,
+                                        },
+                                    );
+                                    send_event(&event_tx, RuntimeEvent::Error(message));
+                                }
+                            }
+                        }
                         WorkerEvent::HistoryFailed(message) => {
                             if let Some(mut writer) = history_writer.take() {
                                 writer.stop();
@@ -478,6 +767,7 @@ async fn run_coordinator(
                     request_video_stop(video_worker_stop.as_ref());
                     request_input_stop(input_queue.as_mut());
                     request_recognition_stop(recognition_worker.as_mut());
+                    request_video_stop(offline_worker_stop.as_ref());
                     break;
                 };
                 match command {
@@ -514,7 +804,9 @@ async fn run_coordinator(
                         }
                     }
                     RuntimeCommand::LoadAutomationProfile(path) => {
-                        if connection_state != ConnectionState::Disconnected {
+                        if connection_state != ConnectionState::Disconnected
+                            || offline_worker_stop.is_some()
+                        {
                             send_event(&event_tx, RuntimeEvent::Error(
                                 "stop automation before loading a profile".to_owned(),
                             ));
@@ -552,7 +844,9 @@ async fn run_coordinator(
                         }
                     }
                     RuntimeCommand::SetAutomationDryRun(enabled) => {
-                        if connection_state != ConnectionState::Disconnected {
+                        if connection_state != ConnectionState::Disconnected
+                            || offline_worker_stop.is_some()
+                        {
                             send_event(&event_tx, RuntimeEvent::Error(
                                 "stop automation before changing dry-run".to_owned(),
                             ));
@@ -565,9 +859,11 @@ async fn run_coordinator(
                         );
                     }
                     RuntimeCommand::StartAutomation => {
-                        if connection_state != ConnectionState::Disconnected {
+                        if connection_state != ConnectionState::Disconnected
+                            || offline_worker_stop.is_some()
+                        {
                             send_event(&event_tx, RuntimeEvent::Error(
-                                "a video session is already active".to_owned(),
+                                "another automation session is already active".to_owned(),
                             ));
                             continue;
                         }
@@ -710,6 +1006,55 @@ async fn run_coordinator(
                             request_video_stop(video_worker_stop.as_ref());
                         }
                     }
+                    RuntimeCommand::StartOfflineAutomation {
+                        profile_path,
+                        frames_directory,
+                        history_path,
+                    } => {
+                        if connection_state != ConnectionState::Disconnected
+                            || offline_worker_stop.is_some()
+                        {
+                            send_event(
+                                &event_tx,
+                                RuntimeEvent::Error(
+                                    "another automation session is already active".to_owned(),
+                                ),
+                            );
+                            continue;
+                        }
+                        let stop = Arc::new(AtomicBool::new(false));
+                        offline_worker_stop = Some(Arc::clone(&stop));
+                        if let Ok(mut latest_frame) = latest_frame.lock() {
+                            *latest_frame = LatestFrameStore::default();
+                        }
+                        send_event(&event_tx, RuntimeEvent::DetectionsUpdated(Vec::new()));
+                        send_event(&event_tx, RuntimeEvent::OfflineAutomationStarted);
+                        let completion_tx = worker_event_tx.clone();
+                        let _offline_task = tokio::spawn(async move {
+                            let result = tokio::task::spawn_blocking(move || {
+                                let paths = discover_offline_frames(frames_directory)?;
+                                run_offline_automation_with_stop(
+                                    &profile_path,
+                                    &paths,
+                                    OfflineAutomationOptions {
+                                        history_path,
+                                        ..OfflineAutomationOptions::default()
+                                    },
+                                    Some(&stop),
+                                )
+                            })
+                            .await
+                            .map_err(|error| RuntimeError::Offline(format!(
+                                "offline automation worker failed: {error}"
+                            )))
+                            .and_then(|result| result)
+                            .map_err(|error| error.to_string());
+                            let _ = completion_tx.send(WorkerEvent::OfflineEnded(result));
+                        });
+                    }
+                    RuntimeCommand::StopOfflineAutomation => {
+                        request_video_stop(offline_worker_stop.as_ref());
+                    }
                     RuntimeCommand::SubmitInput(command) => {
                         if connection_state != ConnectionState::Connected {
                             send_event(
@@ -731,6 +1076,7 @@ async fn run_coordinator(
                         request_input_stop(input_queue.as_mut());
                         request_recognition_stop(recognition_worker.as_mut());
                         request_video_stop(video_worker_stop.as_ref());
+                        request_video_stop(offline_worker_stop.as_ref());
                         break;
                     }
                 }
@@ -1299,6 +1645,7 @@ enum WorkerEvent {
     InputFailed(String),
     DetectionsUpdated(Vec<Detection>),
     RecognitionFailed(String),
+    OfflineEnded(Result<OfflineAutomationReport, String>),
     HistoryFailed(String),
 }
 
@@ -1307,6 +1654,7 @@ pub enum RuntimeError {
     Build(std::io::Error),
     AutomationProfile(String),
     Recognition(String),
+    Offline(String),
     Stopped,
 }
 
@@ -1323,6 +1671,7 @@ impl fmt::Display for RuntimeError {
             Self::Recognition(message) => {
                 write!(formatter, "failed to configure recognition: {message}")
             }
+            Self::Offline(message) => write!(formatter, "offline automation failed: {message}"),
             Self::Stopped => formatter.write_str("runtime has stopped"),
         }
     }
@@ -1332,7 +1681,10 @@ impl Error for RuntimeError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Build(error) => Some(error),
-            Self::AutomationProfile(_) | Self::Recognition(_) | Self::Stopped => None,
+            Self::AutomationProfile(_)
+            | Self::Recognition(_)
+            | Self::Offline(_)
+            | Self::Stopped => None,
         }
     }
 }
@@ -1348,6 +1700,7 @@ mod tests {
 
     use better_e7_core::{InputError, PixelFormat};
     use better_e7_video::VideoDecodeError;
+    use image::RgbImage;
 
     use super::*;
 
@@ -1577,6 +1930,89 @@ mod tests {
                 }
             }
         );
+    }
+
+    #[test]
+    fn runs_a_sorted_image_sequence_without_android() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("better-e7-offline-{suffix}"));
+        let frames_directory = root.join("frames");
+        let profile_path = root.join("automation.toml");
+        let history_path = root.join("history.jsonl");
+        fs::create_dir_all(&frames_directory).unwrap();
+        fs::write(
+            &profile_path,
+            r#"
+                name = "offline-profile"
+
+                [[rules]]
+                id = "go-home"
+
+                [rules.condition]
+                type = "always"
+
+                [rules.action]
+                type = "key"
+                android_key_code = 3
+            "#,
+        )
+        .unwrap();
+        RgbImage::from_raw(1, 1, vec![20, 20, 20])
+            .unwrap()
+            .save(frames_directory.join("02.png"))
+            .unwrap();
+        RgbImage::from_raw(1, 1, vec![10, 10, 10])
+            .unwrap()
+            .save(frames_directory.join("01.png"))
+            .unwrap();
+        fs::write(frames_directory.join("ignored.txt"), "not an image").unwrap();
+
+        let paths = discover_offline_frames(&frames_directory).unwrap();
+        let report = run_offline_automation(
+            &profile_path,
+            &paths,
+            OfflineAutomationOptions {
+                history_path: Some(history_path.clone()),
+                ..OfflineAutomationOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(paths[0].file_name().unwrap().to_string_lossy(), "01.png");
+        assert_eq!(paths[1].file_name().unwrap().to_string_lossy(), "02.png");
+        assert_eq!(report.profile_name, "offline-profile");
+        assert_eq!(report.processed_frames, 2);
+        assert!(!report.stopped);
+        assert_eq!(report.last_frame.as_ref().unwrap().id(), 1);
+        assert!(report.last_detections.is_empty());
+        assert_eq!(report.events.len(), 4);
+        assert_eq!(
+            report.events[0],
+            OfflineAutomationEvent::RuleFired("go-home".to_owned())
+        );
+        assert_eq!(
+            report.events[1],
+            OfflineAutomationEvent::InputPlanned {
+                rule_id: "go-home".to_owned(),
+                command: InputCommand::Key {
+                    android_key_code: 3
+                }
+            }
+        );
+
+        let history = fs::read_to_string(history_path).unwrap();
+        let records = history
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(records.len(), 4);
+        assert_eq!(records[0]["event"], "rule_fired");
+        assert_eq!(records[1]["event"], "input_planned");
+        assert_eq!(records[2]["session_elapsed_ms"], 100);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

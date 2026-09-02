@@ -95,3 +95,9 @@ GUIでは停止中にprofile pathを変更できます。dry-runを有効にす�
 profileにtemplateがなくてもRule engineは動きます。この構成は`always`や固定座標のActionをmock Frameで検証するときに使えます。rule editorは今後の実装範囲です。
 
 `automation_history_path`を設定すると、Ruleの発火と入力の処理結果をJSONLへ追記します。dry-runでは`input_planned`、通常実行では`input_queued`として区別します。
+
+## オフライン実行
+
+GUIのオフライン実行へ録画から抽出したFrameのdirectoryを指定すると、PNG / JPEGを名前順に読みます。読み込んだFrameは通常実行と同じtemplate認識とRule engineを通りますが、Android入力は行わず、Actionは予定入力として表示します。
+
+profileとFrameのdirectoryを入力して保存Frameを実行を押します。処理中は同じ場所の停止で中断できます。`automation_history_path`が設定されている場合は、Ruleと予定入力も通常のJSONLへ保存します。

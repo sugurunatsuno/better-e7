@@ -33,6 +33,8 @@ pub struct BetterE7App {
     automation_profile_name: Option<String>,
     automation_profile_path: String,
     automation_dry_run: bool,
+    offline_frames_directory: String,
+    offline_automation_running: bool,
     last_automation_rule: Option<String>,
     last_planned_input: Option<String>,
     logs: Vec<String>,
@@ -61,6 +63,8 @@ impl BetterE7App {
                 .map(|path| path.to_string_lossy().into_owned())
                 .unwrap_or_default(),
             automation_dry_run: config.automation_dry_run,
+            offline_frames_directory: String::new(),
+            offline_automation_running: false,
             last_automation_rule: None,
             last_planned_input: None,
             logs: vec!["better-e7を起動しました".to_owned()],
@@ -177,6 +181,23 @@ impl BetterE7App {
                     self.last_planned_input = Some(description.clone());
                     self.push_log(format!("dry-run: {rule_id} / {description}"));
                 }
+                RuntimeEvent::OfflineAutomationStarted => {
+                    self.offline_automation_running = true;
+                    self.last_automation_rule = None;
+                    self.last_planned_input = None;
+                    self.push_log("オフライン実行を開始しました");
+                }
+                RuntimeEvent::OfflineAutomationFinished {
+                    processed_frames,
+                    stopped,
+                } => {
+                    self.offline_automation_running = false;
+                    self.push_log(if stopped {
+                        format!("オフライン実行を停止しました: {processed_frames} frames")
+                    } else {
+                        format!("オフライン実行が完了しました: {processed_frames} frames")
+                    });
+                }
                 RuntimeEvent::Error(message) => {
                     error!(%message, "runtime error");
                     self.push_log(format!("エラー: {message}"));
@@ -248,6 +269,7 @@ impl BetterE7App {
                 });
 
                 let can_toggle = self.runtime.is_some()
+                    && !self.offline_automation_running
                     && match self.connection_state {
                         ConnectionState::Disconnected => self.selected_device.is_some(),
                         ConnectionState::Connected => true,
@@ -277,6 +299,7 @@ impl BetterE7App {
         let mut input_command = None;
         let mut profile_path = None;
         let mut dry_run = None;
+        let mut offline_command = None;
         egui::SidePanel::left("devices")
             .resizable(true)
             .default_width(260.0)
@@ -363,7 +386,8 @@ impl BetterE7App {
                     self.automation_profile_name.as_deref().unwrap_or("未設定")
                 ));
                 let can_configure = self.runtime.is_some()
-                    && self.connection_state == ConnectionState::Disconnected;
+                    && self.connection_state == ConnectionState::Disconnected
+                    && !self.offline_automation_running;
                 ui.add_enabled(
                     can_configure,
                     egui::TextEdit::singleline(&mut self.automation_profile_path)
@@ -395,6 +419,46 @@ impl BetterE7App {
                         .as_deref()
                         .unwrap_or("無効")
                 ));
+
+                ui.separator();
+                ui.heading("オフライン実行");
+                ui.add_enabled(
+                    !self.offline_automation_running,
+                    egui::TextEdit::singleline(&mut self.offline_frames_directory)
+                        .hint_text("frames directory"),
+                );
+                let can_start_offline = self.runtime.is_some()
+                    && self.connection_state == ConnectionState::Disconnected
+                    && !self.offline_automation_running
+                    && !self.automation_profile_path.trim().is_empty()
+                    && !self.offline_frames_directory.trim().is_empty();
+                let offline_button_enabled =
+                    can_start_offline || self.offline_automation_running;
+                let offline_button_label = if self.offline_automation_running {
+                    "停止"
+                } else {
+                    "保存Frameを実行"
+                };
+                if ui
+                    .add_enabled(
+                        offline_button_enabled,
+                        egui::Button::new(offline_button_label),
+                    )
+                    .clicked()
+                {
+                    offline_command = Some(if self.offline_automation_running {
+                        RuntimeCommand::StopOfflineAutomation
+                    } else {
+                        RuntimeCommand::StartOfflineAutomation {
+                            profile_path: PathBuf::from(self.automation_profile_path.trim()),
+                            frames_directory: PathBuf::from(
+                                self.offline_frames_directory.trim(),
+                            ),
+                            history_path: self.config.automation_history_path.clone(),
+                        }
+                    });
+                }
+                ui.label("PNG / JPEGを名前順にdry-runします");
             });
         if let Some(command) = input_command {
             self.send(RuntimeCommand::SubmitInput(command));
@@ -404,6 +468,9 @@ impl BetterE7App {
         }
         if let Some(enabled) = dry_run {
             self.send(RuntimeCommand::SetAutomationDryRun(enabled));
+        }
+        if let Some(command) = offline_command {
+            self.send(command);
         }
     }
 
@@ -465,6 +532,11 @@ impl BetterE7App {
             ui.label(format!("認識FPS: {:.1}", self.recognition_fps));
             ui.label(format!("検出数: {}", self.detections.len()));
             ui.label(format!("受信量: {} bytes", self.video_bytes_received));
+            ui.label(if self.offline_automation_running {
+                "オフライン実行: 実行中"
+            } else {
+                "オフライン実行: 停止中"
+            });
             let resolution = self
                 .preview_resolution
                 .map(|[width, height]| format!("{width} x {height}"))

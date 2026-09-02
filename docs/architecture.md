@@ -104,6 +104,8 @@ profileは停止中に読み直せます。新しいprofileのparse / validation
 
 録画の回帰確認には動画decoderを毎回動かさず、録画から抽出した画像pathを`ImageSequenceSource`へ渡します。Frame IDと順序を固定できるため、同じmatcher結果を通常CIで再現できます。
 
+オフライン実行では指定directory内のPNG / JPEGを名前順に読み、通常実行と同じprofile読み込み / `RecognizerSet` / `AutomationEngine`へ渡します。入力はAndroidへ送らず、すべて予定入力としてGUIと実行履歴へ返します。処理は専用workerで動かし、GUIから停止できます。
+
 実行履歴は容量を制限した専用channelからhistory workerへ渡し、JSONLへ順番に追記します。自動化のcoordinatorはファイルI/Oを行いません。履歴の書き込みに失敗した場合はworkerを切り離し、映像 / 認識 / 入力は停止しません。
 
 | 経路 | 方針 |
