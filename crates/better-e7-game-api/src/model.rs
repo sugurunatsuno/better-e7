@@ -62,11 +62,7 @@ pub struct GameContext<'a> {
 
 impl<'a> GameContext<'a> {
     #[must_use]
-    pub const fn new(
-        frame: &'a Frame,
-        detections: &'a [Detection],
-        state: &'a GameState,
-    ) -> Self {
+    pub const fn new(frame: &'a Frame, detections: &'a [Detection], state: &'a GameState) -> Self {
         Self {
             frame,
             detections,
@@ -256,10 +252,7 @@ mod tests {
         let context = GameContext::new(&frame, &detections, &state);
 
         assert_eq!(
-            context
-                .best_detection("confirm", 0.9)
-                .unwrap()
-                .confidence,
+            context.best_detection("confirm", 0.9).unwrap().confidence,
             0.97
         );
         assert!(context.best_detection("confirm", 0.98).is_none());
@@ -275,8 +268,7 @@ mod tests {
             "return home",
         )
         .unwrap();
-        plan.set_transition(StateId::new("home").unwrap())
-            .unwrap();
+        plan.set_transition(StateId::new("home").unwrap()).unwrap();
 
         assert_eq!(
             plan.set_input(

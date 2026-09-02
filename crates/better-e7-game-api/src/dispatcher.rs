@@ -18,10 +18,7 @@ pub trait Trigger: Send {
         true
     }
 
-    fn evaluate(
-        &mut self,
-        context: &GameContext<'_>,
-    ) -> Result<TriggerOutcome, ComponentError>;
+    fn evaluate(&mut self, context: &GameContext<'_>) -> Result<TriggerOutcome, ComponentError>;
 }
 
 pub trait Task: Send {
@@ -89,11 +86,7 @@ impl Dispatcher {
         trigger: impl Trigger + 'static,
     ) -> Result<(), DispatcherError> {
         let id = trigger.id().clone();
-        if self
-            .triggers
-            .iter()
-            .any(|slot| slot.trigger.id() == &id)
-        {
+        if self.triggers.iter().any(|slot| slot.trigger.id() == &id) {
             return Err(DispatcherError::DuplicateTrigger(id));
         }
         let slot = TriggerSlot {
@@ -137,13 +130,12 @@ impl Dispatcher {
                 }
                 let context = GameContext::new(frame, detections, &self.state);
                 let id = slot.trigger.id().clone();
-                let outcome = slot
-                    .trigger
-                    .evaluate(&context)
-                    .map_err(|error| DispatcherError::TriggerFailed {
+                let outcome = slot.trigger.evaluate(&context).map_err(|error| {
+                    DispatcherError::TriggerFailed {
                         id: id.clone(),
                         error,
-                    })?;
+                    }
+                })?;
                 (id, outcome)
             };
 
@@ -548,11 +540,17 @@ mod tests {
             .unwrap();
 
         let started = dispatcher.start_task(&task_id, &frame(), &[]).unwrap();
-        assert_eq!(started.task_event, Some(TaskEvent::Started(task_id.clone())));
+        assert_eq!(
+            started.task_event,
+            Some(TaskEvent::Started(task_id.clone()))
+        );
         dispatcher.pause_task().unwrap();
         dispatcher.tick(&frame(), &[]).unwrap();
         assert_eq!(*updates.lock().unwrap(), 0);
-        assert_eq!(dispatcher.active_task_state(), Some(ActiveTaskState::Paused));
+        assert_eq!(
+            dispatcher.active_task_state(),
+            Some(ActiveTaskState::Paused)
+        );
 
         dispatcher.resume_task().unwrap();
         let completed = dispatcher.tick(&frame(), &[]).unwrap();
