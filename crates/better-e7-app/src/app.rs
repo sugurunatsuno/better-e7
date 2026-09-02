@@ -118,18 +118,13 @@ impl BetterE7App {
         let size = [frame.width() as usize, frame.height() as usize];
         let image = match frame.format() {
             PixelFormat::Rgb8 => egui::ColorImage::from_rgb(size, frame.pixels()),
-            PixelFormat::Rgba8 => {
-                egui::ColorImage::from_rgba_unmultiplied(size, frame.pixels())
-            }
+            PixelFormat::Rgba8 => egui::ColorImage::from_rgba_unmultiplied(size, frame.pixels()),
         };
         if let Some(texture) = self.preview_texture.as_mut() {
             texture.set(image, egui::TextureOptions::LINEAR);
         } else {
-            self.preview_texture = Some(context.load_texture(
-                "android-preview",
-                image,
-                egui::TextureOptions::LINEAR,
-            ));
+            self.preview_texture =
+                Some(context.load_texture("android-preview", image, egui::TextureOptions::LINEAR));
         }
         self.preview_resolution = Some(size);
     }
@@ -255,12 +250,8 @@ impl BetterE7App {
                 .rect_filled(rect, 6.0, egui::Color32::from_gray(24));
             if let Some(texture) = &self.preview_texture {
                 let texture_size = texture.size_vec2();
-                let scale = (rect.width() / texture_size.x)
-                    .min(rect.height() / texture_size.y);
-                let image_rect = egui::Rect::from_center_size(
-                    rect.center(),
-                    texture_size * scale,
-                );
+                let scale = (rect.width() / texture_size.x).min(rect.height() / texture_size.y);
+                let image_rect = egui::Rect::from_center_size(rect.center(), texture_size * scale);
                 ui.painter().image(
                     texture.id(),
                     image_rect,

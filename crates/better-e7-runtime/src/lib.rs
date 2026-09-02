@@ -73,9 +73,8 @@ impl AppRuntime {
         let lister: Arc<dyn DeviceLister> = Arc::new(AdbClient::new(config.adb_path.clone()));
         let session_factory: Arc<dyn VideoSessionFactory> =
             Arc::new(ScrcpySessionFactory::new(config));
-        let decoder_factory: Arc<dyn VideoDecoderFactory> = Arc::new(
-            FfmpegProcessDecoderFactory::new(config.ffmpeg_path.clone()),
-        );
+        let decoder_factory: Arc<dyn VideoDecoderFactory> =
+            Arc::new(FfmpegProcessDecoderFactory::new(config.ffmpeg_path.clone()));
         let latest_frame = Arc::new(Mutex::new(None));
         let refresh_interval = Duration::from_millis(config.device_refresh_interval_ms);
 
@@ -386,7 +385,10 @@ fn store_decoded_frames(
     decoder: &mut dyn VideoDecoder,
     latest_frame: &Mutex<Option<Frame>>,
 ) -> Result<(), String> {
-    while let Some(frame) = decoder.try_next_frame().map_err(|error| error.to_string())? {
+    while let Some(frame) = decoder
+        .try_next_frame()
+        .map_err(|error| error.to_string())?
+    {
         let mut slot = latest_frame
             .lock()
             .map_err(|_| "latest frame store is unavailable".to_owned())?;
@@ -461,9 +463,7 @@ mod tests {
     fn keeps_only_the_latest_decoded_frame() {
         let frames = [1_u64, 2]
             .into_iter()
-            .map(|id| {
-                Frame::new(id, Instant::now(), 1, 1, PixelFormat::Rgb8, vec![0; 3]).unwrap()
-            })
+            .map(|id| Frame::new(id, Instant::now(), 1, 1, PixelFormat::Rgb8, vec![0; 3]).unwrap())
             .collect();
         let mut decoder = MockDecoder { frames };
         let latest = Mutex::new(None);

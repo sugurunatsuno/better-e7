@@ -192,8 +192,9 @@ fn read_ppm_frame(reader: &mut impl Read, frame_id: u64) -> io::Result<Option<Fr
 }
 
 fn read_required_u32(reader: &mut impl Read, name: &str) -> io::Result<u32> {
-    let token = read_ppm_token(reader)?
-        .ok_or_else(|| io::Error::new(io::ErrorKind::UnexpectedEof, format!("missing PPM {name}")))?;
+    let token = read_ppm_token(reader)?.ok_or_else(|| {
+        io::Error::new(io::ErrorKind::UnexpectedEof, format!("missing PPM {name}"))
+    })?;
     token
         .parse()
         .map_err(|_| invalid_data(format!("invalid PPM {name}: {token}")))
@@ -270,10 +271,7 @@ impl Error for VideoDecodeError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Spawn(error) | Self::ReaderThread(error) | Self::Write(error) => Some(error),
-            Self::MissingPipe(_)
-            | Self::InputClosed
-            | Self::Output(_)
-            | Self::OutputClosed => None,
+            Self::MissingPipe(_) | Self::InputClosed | Self::Output(_) | Self::OutputClosed => None,
         }
     }
 }
