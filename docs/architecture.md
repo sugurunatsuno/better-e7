@@ -100,6 +100,10 @@ engineへ渡す時間は外部で管理します。単体テストでは任意�
 
 profile内の複数templateは`RecognizerSet`へまとめます。認識workerが返した検出一覧をengineへ渡し、生成された入力を手動操作と同じ入力queueへ送ります。templateの相対pathはprofileのdirectoryを基準にするため、profileとassetを一緒に移動できます。GUIはprofile名 / 最後に実行したRule / log Actionをruntime eventとして受け取ります。
 
+profileは停止中に読み直せます。新しいprofileのparse / validation / template読み込みがすべて成功してからrecognizerとengineを交換します。失敗時は実行中の設定を維持します。dry-runではengineまで同じ経路を通し、入力queueの直前で予定入力eventへ変換します。
+
+録画の回帰確認には動画decoderを毎回動かさず、録画から抽出した画像pathを`ImageSequenceSource`へ渡します。Frame IDと順序を固定できるため、同じmatcher結果を通常CIで再現できます。
+
 | 経路 | 方針 |
 |---|---|
 | デコードから認識 | 最新フレームを1枚だけ保持する |

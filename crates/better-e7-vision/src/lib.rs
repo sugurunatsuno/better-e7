@@ -16,6 +16,35 @@ pub struct ImageFileSource {
     pending: Option<Frame>,
 }
 
+pub struct ImageSequenceSource {
+    paths: Vec<PathBuf>,
+    next_index: usize,
+    next_frame_id: u64,
+    started: bool,
+}
+
+impl ImageSequenceSource {
+    #[must_use]
+    pub fn new(paths: impl IntoIterator<Item = PathBuf>) -> Self {
+        Self {
+            paths: paths.into_iter().collect(),
+            next_index: 0,
+            next_frame_id: 0,
+            started: false,
+        }
+    }
+
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.paths.len()
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.paths.is_empty()
+    }
+}
+
 impl ImageFileSource {
     #[must_use]
     pub fn new(path: impl Into<PathBuf>) -> Self {
@@ -42,6 +71,36 @@ impl VideoSource for ImageFileSource {
 
     fn stop(&mut self) -> Result<(), VideoSourceError> {
         self.pending = None;
+        Ok(())
+    }
+}
+
+impl VideoSource for ImageSequenceSource {
+    fn start(&mut self) -> Result<(), VideoSourceError> {
+        self.next_index = 0;
+        self.next_frame_id = 0;
+        self.started = true;
+        Ok(())
+    }
+
+    fn try_latest_frame(&mut self) -> Result<Option<Frame>, VideoSourceError> {
+        if !self.started {
+            return Err(VideoSourceError(
+                "image sequence source has not started".to_owned(),
+            ));
+        }
+        let Some(path) = self.paths.get(self.next_index) else {
+            return Ok(None);
+        };
+        let frame = load_rgb_frame(path, self.next_frame_id)
+            .map_err(|error| VideoSourceError(error.to_string()))?;
+        self.next_index = self.next_index.saturating_add(1);
+        self.next_frame_id = self.next_frame_id.saturating_add(1);
+        Ok(Some(frame))
+    }
+
+    fn stop(&mut self) -> Result<(), VideoSourceError> {
+        self.started = false;
         Ok(())
     }
 }
@@ -365,6 +424,45 @@ mod tests {
         assert_eq!(frame.pixels(), [1, 2, 3, 4, 5, 6]);
         assert!(source.try_latest_frame().unwrap().is_none());
         fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn replays_extracted_frames_for_recognition_regression() {
+        let suffix = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let first_path = std::env::temp_dir().join(format!("better-e7-{suffix}-0.png"));
+        let second_path = std::env::temp_dir().join(format!("better-e7-{suffix}-1.png"));
+        image::RgbImage::from_raw(2, 1, vec![0, 0, 0, 0, 0, 0])
+            .unwrap()
+            .save(&first_path)
+            .unwrap();
+        image::RgbImage::from_raw(2, 1, vec![0, 0, 0, 255, 0, 0])
+            .unwrap()
+            .save(&second_path)
+            .unwrap();
+        let matcher = TemplateMatcher::new(
+            "target",
+            rgb_frame(1, 1, vec![255, 0, 0]),
+            0.99,
+            NormalizedRect::full(),
+        )
+        .unwrap();
+        let mut source = ImageSequenceSource::new([first_path.clone(), second_path.clone()]);
+
+        source.start().unwrap();
+        let first = source.try_latest_frame().unwrap().unwrap();
+        let second = source.try_latest_frame().unwrap().unwrap();
+
+        assert_eq!(source.len(), 2);
+        assert_eq!((first.id(), second.id()), (0, 1));
+        assert!(matcher.recognize(&first).unwrap().is_empty());
+        assert_eq!(matcher.recognize(&second).unwrap().len(), 1);
+        assert!(source.try_latest_frame().unwrap().is_none());
+        source.stop().unwrap();
+        fs::remove_file(first_path).unwrap();
+        fs::remove_file(second_path).unwrap();
     }
 
     #[test]

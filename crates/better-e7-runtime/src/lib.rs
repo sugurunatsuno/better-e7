@@ -13,7 +13,7 @@ use std::{
 
 use better_e7_adb::{AdbClient, AdbDevice, AdbInputController, DeviceLister};
 use better_e7_android::{ActiveVideoSession, ScrcpySessionFactory, VideoSessionFactory};
-use better_e7_automation::{AutomationEngine, AutomationProfile};
+use better_e7_automation::{AutomationEngine, AutomationInput, AutomationProfile};
 use better_e7_config::AppConfig;
 use better_e7_core::{
     Detection, Frame, InputCommand, InputController, NormalizedRect, PixelInputCommand, Recognizer,
@@ -33,6 +33,8 @@ const INPUT_QUEUE_SIZE: usize = 64;
 pub enum RuntimeCommand {
     RefreshDevices,
     SelectDevice(String),
+    LoadAutomationProfile(PathBuf),
+    SetAutomationDryRun(bool),
     StartAutomation,
     StopAutomation,
     SubmitInput(InputCommand),
@@ -63,8 +65,17 @@ pub enum RuntimeEvent {
     InputQueued(PixelInputCommand),
     InputExecuted(PixelInputCommand),
     DetectionsUpdated(Vec<Detection>),
+    AutomationProfileChanged {
+        name: String,
+        path: PathBuf,
+    },
+    AutomationDryRunChanged(bool),
     AutomationRuleFired(String),
     AutomationLog(String),
+    AutomationInputPlanned {
+        rule_id: String,
+        command: InputCommand,
+    },
     Error(String),
 }
 
@@ -78,7 +89,6 @@ pub struct AppRuntime {
     command_tx: mpsc::UnboundedSender<RuntimeCommand>,
     event_rx: mpsc::UnboundedReceiver<RuntimeEvent>,
     latest_frame: Arc<Mutex<LatestFrameStore>>,
-    automation_profile_name: Option<String>,
     _runtime: Runtime,
 }
 
@@ -96,7 +106,23 @@ impl AppRuntime {
             Arc::new(ScrcpySessionFactory::new(config));
         let decoder_factory: Arc<dyn VideoDecoderFactory> =
             Arc::new(FfmpegProcessDecoderFactory::new(config.ffmpeg_path.clone()));
-        let automation = build_automation(config)?;
+        let automation = match build_automation(config) {
+            Ok(automation) => automation,
+            Err(error) => {
+                let _ = event_tx.send(RuntimeEvent::Error(error.to_string()));
+                BuiltAutomation {
+                    recognizer: None,
+                    engine: None,
+                    profile_name: None,
+                }
+            }
+        };
+        if let (Some(name), Some(path)) = (
+            automation.profile_name.clone(),
+            config.automation_profile_path.clone(),
+        ) {
+            let _ = event_tx.send(RuntimeEvent::AutomationProfileChanged { name, path });
+        }
         let latest_frame = Arc::new(Mutex::new(LatestFrameStore::default()));
         let refresh_interval = Duration::from_millis(config.device_refresh_interval_ms);
 
@@ -108,6 +134,7 @@ impl AppRuntime {
             adb_path: config.adb_path.clone(),
             recognizer: automation.recognizer,
             automation_engine: automation.engine,
+            automation_dry_run: config.automation_dry_run,
         };
         let _coordinator = runtime.spawn(run_coordinator(
             resources,
@@ -120,7 +147,6 @@ impl AppRuntime {
             command_tx,
             event_rx,
             latest_frame,
-            automation_profile_name: automation.profile_name,
             _runtime: runtime,
         })
     }
@@ -139,10 +165,6 @@ impl AppRuntime {
         self.latest_frame.lock().ok()?.pending.take()
     }
 
-    #[must_use]
-    pub fn automation_profile_name(&self) -> Option<&str> {
-        self.automation_profile_name.as_deref()
-    }
 }
 
 impl Drop for AppRuntime {
@@ -159,6 +181,7 @@ struct CoordinatorResources {
     adb_path: PathBuf,
     recognizer: Option<Arc<dyn Recognizer>>,
     automation_engine: Option<AutomationEngine>,
+    automation_dry_run: bool,
 }
 
 struct BuiltAutomation {
@@ -176,6 +199,10 @@ fn build_automation(config: &AppConfig) -> Result<BuiltAutomation, RuntimeError>
         });
     };
 
+    build_profile_automation(profile_path)
+}
+
+fn build_profile_automation(profile_path: &Path) -> Result<BuiltAutomation, RuntimeError> {
     let profile = AutomationProfile::load(profile_path)
         .map_err(|error| RuntimeError::AutomationProfile(error.to_string()))?;
     let mut recognizers = RecognizerSet::new();
@@ -245,8 +272,9 @@ async fn run_coordinator(
         decoder_factory,
         latest_frame,
         adb_path,
-        recognizer,
+        mut recognizer,
         mut automation_engine,
+        mut automation_dry_run,
     } = resources;
     let mut interval = tokio::time::interval(refresh_interval);
     interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
@@ -333,21 +361,31 @@ async fn run_coordinator(
                                             );
                                         }
                                         if let Some(input) = report.input {
-                                            match queue_input(
-                                                input.command,
+                                            match dispatch_automation_input(
+                                                input,
+                                                automation_dry_run,
                                                 &latest_frame,
                                                 input_queue.as_ref(),
                                             ) {
-                                                Ok(command) => send_event(
+                                                Ok(AutomationInputDispatch::Queued(command)) => {
+                                                    send_event(
+                                                        &event_tx,
+                                                        RuntimeEvent::InputQueued(command),
+                                                    );
+                                                }
+                                                Ok(AutomationInputDispatch::Planned {
+                                                    rule_id,
+                                                    command,
+                                                }) => send_event(
                                                     &event_tx,
-                                                    RuntimeEvent::InputQueued(command),
+                                                    RuntimeEvent::AutomationInputPlanned {
+                                                        rule_id,
+                                                        command,
+                                                    },
                                                 ),
                                                 Err(message) => send_event(
                                                     &event_tx,
-                                                    RuntimeEvent::Error(format!(
-                                                        "automation rule {} failed to queue input: {message}",
-                                                        input.rule_id
-                                                    )),
+                                                    RuntimeEvent::Error(message),
                                                 ),
                                             }
                                         }
@@ -407,6 +445,56 @@ async fn run_coordinator(
                                 "the selected device is not ready".to_owned(),
                             ));
                         }
+                    }
+                    RuntimeCommand::LoadAutomationProfile(path) => {
+                        if connection_state != ConnectionState::Disconnected {
+                            send_event(&event_tx, RuntimeEvent::Error(
+                                "stop automation before loading a profile".to_owned(),
+                            ));
+                            continue;
+                        }
+                        let result = tokio::task::spawn_blocking(move || {
+                            let automation = build_profile_automation(&path);
+                            (path, automation)
+                        }).await;
+                        match result {
+                            Ok((path, Ok(automation))) => {
+                                recognizer = automation.recognizer;
+                                automation_engine = automation.engine;
+                                let profile_name = automation
+                                    .profile_name
+                                    .expect("loaded profiles always have a name");
+                                send_event(
+                                    &event_tx,
+                                    RuntimeEvent::AutomationProfileChanged {
+                                        name: profile_name,
+                                        path,
+                                    },
+                                );
+                            }
+                            Ok((_, Err(error))) => {
+                                send_event(&event_tx, RuntimeEvent::Error(error.to_string()));
+                            }
+                            Err(error) => send_event(
+                                &event_tx,
+                                RuntimeEvent::Error(format!(
+                                    "profile loader failed: {error}"
+                                )),
+                            ),
+                        }
+                    }
+                    RuntimeCommand::SetAutomationDryRun(enabled) => {
+                        if connection_state != ConnectionState::Disconnected {
+                            send_event(&event_tx, RuntimeEvent::Error(
+                                "stop automation before changing dry-run".to_owned(),
+                            ));
+                            continue;
+                        }
+                        automation_dry_run = enabled;
+                        send_event(
+                            &event_tx,
+                            RuntimeEvent::AutomationDryRunChanged(enabled),
+                        );
                     }
                     RuntimeCommand::StartAutomation => {
                         if connection_state != ConnectionState::Disconnected {
@@ -816,6 +904,33 @@ impl Drop for RecognitionWorker {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+enum AutomationInputDispatch {
+    Queued(PixelInputCommand),
+    Planned {
+        rule_id: String,
+        command: InputCommand,
+    },
+}
+
+fn dispatch_automation_input(
+    input: AutomationInput,
+    dry_run: bool,
+    latest_frame: &Mutex<LatestFrameStore>,
+    input_queue: Option<&InputQueue>,
+) -> Result<AutomationInputDispatch, String> {
+    if dry_run {
+        return Ok(AutomationInputDispatch::Planned {
+            rule_id: input.rule_id,
+            command: input.command,
+        });
+    }
+    let rule_id = input.rule_id;
+    queue_input(input.command, latest_frame, input_queue)
+        .map(AutomationInputDispatch::Queued)
+        .map_err(|message| format!("automation rule {rule_id} failed to queue input: {message}"))
+}
+
 fn queue_input(
     command: InputCommand,
     latest_frame: &Mutex<LatestFrameStore>,
@@ -1185,19 +1300,42 @@ mod tests {
             pending: None,
             dimensions: Some((1, 1)),
         });
-        let queued = queue_input(input.command, &latest_frame, Some(&queue)).unwrap();
+        let queued = dispatch_automation_input(input, false, &latest_frame, Some(&queue)).unwrap();
         started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
 
         assert_eq!(automation.profile_name.as_deref(), Some("mock-profile"));
         assert!(detections.is_empty());
         assert_eq!(
             queued,
-            PixelInputCommand::Key {
+            AutomationInputDispatch::Queued(PixelInputCommand::Key {
                 android_key_code: 3
-            }
+            })
         );
         release_tx.send(()).unwrap();
         queue.stop();
         let _ = fs::remove_file(profile_path);
+    }
+
+    #[test]
+    fn dry_run_plans_input_without_an_input_queue() {
+        let input = AutomationInput {
+            rule_id: "go-home".to_owned(),
+            command: InputCommand::Key {
+                android_key_code: 3,
+            },
+        };
+        let latest_frame = Mutex::new(LatestFrameStore::default());
+
+        let dispatch = dispatch_automation_input(input, true, &latest_frame, None).unwrap();
+
+        assert_eq!(
+            dispatch,
+            AutomationInputDispatch::Planned {
+                rule_id: "go-home".to_owned(),
+                command: InputCommand::Key {
+                    android_key_code: 3
+                }
+            }
+        );
     }
 }

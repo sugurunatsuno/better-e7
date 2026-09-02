@@ -27,6 +27,10 @@ FFmpegがPATHにない場合は`better-e7.toml`の`ffmpeg_path`を変更しま�
 
 汎用自動化を試す場合は`automation.example.toml`をコピーし、`automation_profile_path`へ設定します。profile内のtemplate pathはprofileのdirectoryを基準にします。単一templateの認識だけを試す場合は、従来どおり`recognition_template_path`と`recognition_threshold`を使えます。
 
+profileは停止中にGUIのタスク欄から読み直せます。最初はdry-runを有効にすると、認識とRuleの結果を確認しながらAndroidへの自動入力を止められます。手動入力はdry-run中も利用できます。
+
+録画を使う認識回帰では、確認したい場面をPNGまたはJPEGの連番へ抽出し、`ImageSequenceSource`へ順番に渡します。通常CIでは動画codecやAndroid端末を必要としません。
+
 ## 実装の進め方
 
 縦切りで動く範囲を増やします。最初の縦切りは次の流れです。

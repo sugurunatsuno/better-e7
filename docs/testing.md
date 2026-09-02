@@ -14,6 +14,8 @@ Android端末が必要な確認と、通常の自動テストを分けます。
 - ADB tap / swipe / keyのargumentをmock runnerで検証する
 - 入力停止時に未実行のqueueが破棄されることを検証する
 - 保存画像を`VideoSource`として1回だけ取得できることを検証する
+- 録画から抽出した画像列を順番どおりFrameとして再生できることを検証する
+- Frame列でtemplateの未検出から検出への変化を再現する
 - 生成したRGB画像からtemplateの位置と正規化矩形を検出する
 - ROI外の一致を検出しないことを検証する
 - 複数のtemplate recognizerが同じFrameの検出結果をまとめることを検証する
@@ -30,6 +32,7 @@ Android端末が必要な確認と、通常の自動テストを分けます。
 - all / any / notを組み合わせたConditionを検証する
 - tap_detectionが最もconfidenceの高い検出位置を使うことを検証する
 - templateなしのprofileをmock Frameで認識し、Rule engineが入力を生成することを検証する
+- dry-runでは入力queueがなくても予定入力を生成し、InputControllerを呼ばないことを検証する
 
 このテストはUbuntu CIで実行し、ADB / scrcpy-server / FFmpegを必要としません。
 

@@ -1,4 +1,4 @@
-use std::time::{Duration, Instant};
+use std::{path::PathBuf, time::{Duration, Instant}};
 
 use better_e7_adb::AdbDevice;
 use better_e7_config::AppConfig;
@@ -14,6 +14,7 @@ use tracing::{error, info};
 const MAX_VISIBLE_LOGS: usize = 500;
 
 pub struct BetterE7App {
+    config: AppConfig,
     runtime: Option<AppRuntime>,
     devices: Vec<AdbDevice>,
     selected_device: Option<String>,
@@ -27,13 +28,17 @@ pub struct BetterE7App {
     recognition_updates: u32,
     recognition_window_started: Instant,
     automation_profile_name: Option<String>,
+    automation_profile_path: String,
+    automation_dry_run: bool,
     last_automation_rule: Option<String>,
+    last_planned_input: Option<String>,
     logs: Vec<String>,
 }
 
 impl BetterE7App {
     pub fn new(_creation_context: &eframe::CreationContext<'_>, config: AppConfig) -> Self {
         let mut app = Self {
+            config: config.clone(),
             runtime: None,
             devices: Vec::new(),
             selected_device: None,
@@ -47,18 +52,21 @@ impl BetterE7App {
             recognition_updates: 0,
             recognition_window_started: Instant::now(),
             automation_profile_name: None,
+            automation_profile_path: config
+                .automation_profile_path
+                .as_ref()
+                .map(|path| path.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            automation_dry_run: config.automation_dry_run,
             last_automation_rule: None,
+            last_planned_input: None,
             logs: vec!["better-e7を起動しました".to_owned()],
         };
 
         match AppRuntime::new(&config) {
             Ok(runtime) => {
-                app.automation_profile_name = runtime.automation_profile_name().map(str::to_owned);
                 app.runtime = Some(runtime);
                 app.push_log("ADB端末の監視を開始しました");
-                if let Some(profile_name) = app.automation_profile_name.clone() {
-                    app.push_log(format!("自動化profileを読み込みました: {profile_name}"));
-                }
             }
             Err(error) => {
                 error!(%error, "runtime initialization failed");
@@ -110,6 +118,7 @@ impl BetterE7App {
                         self.recognition_updates = 0;
                         self.recognition_window_started = Instant::now();
                         self.last_automation_rule = None;
+                        self.last_planned_input = None;
                     }
                     self.push_log(match state {
                         ConnectionState::Disconnected => "映像接続を終了しました",
@@ -136,12 +145,36 @@ impl BetterE7App {
                         self.recognition_window_started = Instant::now();
                     }
                 }
+                RuntimeEvent::AutomationProfileChanged { name, path } => {
+                    self.automation_profile_name = Some(name.clone());
+                    self.automation_profile_path = path.to_string_lossy().into_owned();
+                    self.config.automation_profile_path = Some(path);
+                    self.save_config();
+                    self.push_log(format!("自動化profileを変更しました: {name}"));
+                }
+                RuntimeEvent::AutomationDryRunChanged(enabled) => {
+                    self.automation_dry_run = enabled;
+                    self.config.automation_dry_run = enabled;
+                    self.save_config();
+                    self.push_log(if enabled {
+                        "dry-runを有効にしました"
+                    } else {
+                        "dry-runを無効にしました"
+                    });
+                }
                 RuntimeEvent::AutomationRuleFired(rule_id) => {
                     self.last_automation_rule = Some(rule_id.clone());
                     self.push_log(format!("Ruleを実行しました: {rule_id}"));
                 }
                 RuntimeEvent::AutomationLog(message) => {
                     self.push_log(format!("自動化: {message}"));
+                }
+                RuntimeEvent::AutomationInputPlanned { rule_id, command } => {
+                    let description = describe_normalized_input(command);
+                    self.last_planned_input = Some(description.clone());
+                    self.push_log(format!(
+                        "dry-run: {rule_id} / {description}"
+                    ));
                 }
                 RuntimeEvent::Error(message) => {
                     error!(%message, "runtime error");
@@ -182,6 +215,12 @@ impl BetterE7App {
             .and_then(|runtime| runtime.send(command).map_err(|error| error.to_string()));
         if let Err(message) = result {
             self.push_log(format!("エラー: {message}"));
+        }
+    }
+
+    fn save_config(&mut self) {
+        if let Err(error) = self.config.save(PathBuf::from("better-e7.toml")) {
+            self.push_log(format!("設定の保存に失敗しました: {error}"));
         }
     }
 
@@ -235,6 +274,8 @@ impl BetterE7App {
 
     fn show_devices(&mut self, context: &egui::Context) {
         let mut input_command = None;
+        let mut profile_path = None;
+        let mut dry_run = None;
         egui::SidePanel::left("devices")
             .resizable(true)
             .default_width(260.0)
@@ -320,10 +361,42 @@ impl BetterE7App {
                     "profile: {}",
                     self.automation_profile_name.as_deref().unwrap_or("未設定")
                 ));
-                ui.label("汎用Rule engineで実行します");
+                let can_configure = self.runtime.is_some()
+                    && self.connection_state == ConnectionState::Disconnected;
+                ui.add_enabled(
+                    can_configure,
+                    egui::TextEdit::singleline(&mut self.automation_profile_path)
+                        .hint_text("automation.toml"),
+                );
+                if ui
+                    .add_enabled(can_configure, egui::Button::new("profileを読み込む"))
+                    .clicked()
+                {
+                    let path = self.automation_profile_path.trim();
+                    if !path.is_empty() {
+                        profile_path = Some(PathBuf::from(path));
+                    }
+                }
+                let mut enabled = self.automation_dry_run;
+                if ui
+                    .add_enabled(
+                        can_configure,
+                        egui::Checkbox::new(&mut enabled, "dry-run"),
+                    )
+                    .changed()
+                {
+                    dry_run = Some(enabled);
+                }
+                ui.label("dry-runではAndroidへ入力を送りません");
             });
         if let Some(command) = input_command {
             self.send(RuntimeCommand::SubmitInput(command));
+        }
+        if let Some(path) = profile_path {
+            self.send(RuntimeCommand::LoadAutomationProfile(path));
+        }
+        if let Some(enabled) = dry_run {
+            self.send(RuntimeCommand::SetAutomationDryRun(enabled));
         }
     }
 
@@ -394,6 +467,10 @@ impl BetterE7App {
                 "最後のRule: {}",
                 self.last_automation_rule.as_deref().unwrap_or("未実行")
             ));
+            ui.label(format!(
+                "予定入力: {}",
+                self.last_planned_input.as_deref().unwrap_or("なし")
+            ));
         });
         if let Some(command) = input_command {
             self.send(RuntimeCommand::SubmitInput(command));
@@ -460,6 +537,29 @@ fn describe_input(command: PixelInputCommand) -> String {
             duration.as_millis()
         ),
         PixelInputCommand::Key { android_key_code } => {
+            format!("keyevent {android_key_code}")
+        }
+    }
+}
+
+fn describe_normalized_input(command: InputCommand) -> String {
+    match command {
+        InputCommand::Tap { point } => {
+            format!("tap {:.3} {:.3}", point.x(), point.y())
+        }
+        InputCommand::Swipe {
+            from,
+            to,
+            duration,
+        } => format!(
+            "swipe {:.3} {:.3} {:.3} {:.3} {}ms",
+            from.x(),
+            from.y(),
+            to.x(),
+            to.y(),
+            duration.as_millis()
+        ),
+        InputCommand::Key { android_key_code } => {
             format!("keyevent {android_key_code}")
         }
     }

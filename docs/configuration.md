@@ -10,6 +10,7 @@ scrcpy_server_path = "third_party/scrcpy/scrcpy-server-v4.1"
 scrcpy_local_port = 27183
 scrcpy_max_size = 1920
 # automation_profile_path = "automation.toml"
+automation_dry_run = false
 recognition_threshold = 0.9
 # recognition_template_path = "assets/confirm.png"
 ```
@@ -57,6 +58,13 @@ Androidから送る映像の最大辺です。初期値は1920です。0を指�
 汎用自動化profileのパスです。相対パスはアプリを起動したdirectoryから解決されます。profile内のtemplate画像はprofileファイルがあるdirectoryを基準に解決されます。
 
 指定した場合はprofile内の複数templateとRule engineを使い、`recognition_template_path` / `recognition_threshold`による単一template設定より優先します。未指定の場合は従来の単一template認識をそのまま使えます。
+
+停止中であればGUIから別のprofile pathを入力して読み直せます。読み込みと検証に成功した場合だけ`better-e7.toml`へ保存します。
+起動時のprofileが読めない場合もADB端末の監視とGUIは起動するため、タスク欄からpathを修正できます。
+
+## automation_dry_run
+
+`true`にするとRuleの認識 / priority / cooldown / logを通常どおり実行しますが、Ruleが生成した入力はAndroidへ送りません。予定していたRuleと入力はGUIの状態欄とログへ表示します。previewのclickやHome / Backなどの手動入力には影響しません。
 
 ## recognition_threshold
 

@@ -90,4 +90,6 @@ label = "confirm"
 
 `better-e7.toml`の`automation_profile_path`へprofileを指定します。開始時にengineのcooldown状態をresetし、認識結果ごとに1回tickします。生成された入力は手動入力と同じ順序付きqueueを通り、GUIには実行Rule / profileのlog / 最後に実行したRuleを表示します。
 
-profileにtemplateがなくてもRule engineは動きます。この構成は`always`や固定座標のActionをmock Frameで検証するときに使えます。editor / dry-run / 実行履歴の保存は今後の実装範囲です。
+GUIでは停止中にprofile pathを変更できます。dry-runを有効にすると入力をqueueへ送らず、予定入力だけを表示します。
+
+profileにtemplateがなくてもRule engineは動きます。この構成は`always`や固定座標のActionをmock Frameで検証するときに使えます。editor / 実行履歴の保存は今後の実装範囲です。
