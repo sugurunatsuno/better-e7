@@ -35,8 +35,10 @@
 
 ## ゲーム自動化
 
-- [ ] game-api crateを作る
-- [ ] GameState / Trigger / Task / Dispatcherを作る
+- [x] game-api crateを作る
+- [x] GameState / Trigger / Task / Dispatcherを作る
+- [x] 複数ゲームを登録するGameRegistryを作る
+- [x] 1 tickにつき入力を1件へ制限する
 - [ ] 例示用ゲームプラグインを作る
 - [ ] 設定 / asset / taskの読み込みを作る
 - [ ] 復旧Triggerと優先度制御を作る

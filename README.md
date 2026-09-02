@@ -2,7 +2,7 @@
 
 Androidゲームの映像取得 / 認識 / 操作 / タスク実行を、macOS / Windows / Linuxで共通化する自動化基盤です。
 
-現在は映像preview / ADB入力 / template認識まで実装しています。Rustとeguiを使い、Androidとの接続はADBと固定versionのscrcpy-serverを使います。
+現在は映像preview / ADB入力 / template認識 / ゲーム自動化APIまで実装しています。Rustとeguiを使い、Androidとの接続はADBと固定versionのscrcpy-serverを使います。
 
 ## 目標
 
@@ -34,6 +34,7 @@ crates/
   better-e7-android/ scrcpy-serverと映像socket
   better-e7-core/  OSやGUIに依存しない型とtrait
   better-e7-config/ TOML設定
+  better-e7-game-api/ ゲーム登録 / 状態 / Trigger / Task / Dispatcher
   better-e7-runtime/ Worker / 状態管理 / 最新Frame / 入力queue
   better-e7-video/ H.264 parser / FFmpeg process decoder
   better-e7-vision/ 保存画像source / template matcher

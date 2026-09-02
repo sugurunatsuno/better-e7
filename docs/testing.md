@@ -17,6 +17,11 @@ Android端末が必要な確認と、通常の自動テストを分けます。
 - 生成したRGB画像からtemplateの位置と正規化矩形を検出する
 - ROI外の一致を検出しないことを検証する
 - 認識中に複数Frameが届いた場合、未処理Frameを最新のものへ置き換えることを検証する
+- 複数ゲームを安定したIDで登録し、重複IDを拒否する
+- Triggerをpriority順に評価し、Consume後は低priorityの処理を呼ばない
+- 消費されたtickでは実行中Taskを更新しない
+- Taskの開始 / 一時停止 / 再開 / 完了をmockで検証する
+- 1回のtickで複数の入力が生成された場合はエラーにする
 
 このテストはUbuntu CIで実行し、ADB / scrcpy-server / FFmpegを必要としません。
 

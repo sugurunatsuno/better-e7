@@ -27,11 +27,11 @@ flowchart TD
 | better-e7-android | scrcpy-server起動 / transport / control | core / adb / Tokio |
 | better-e7-video | ストリーム解析 / デコード / 色変換 | core / FFmpeg |
 | better-e7-vision | 保存画像source / テンプレート / 将来の色 / OCR / ONNX | core / image / 将来のOpenCV / ort |
-| better-e7-game-api | ゲーム / Trigger / Task向けAPI | core |
+| better-e7-game-api | ゲーム登録 / 状態 / Trigger / Task / Dispatcher | core |
 | better-e7-app | GUI / 構成 / 各処理の起動と停止 | 全公開crate / egui |
 | better-e7-cli | ヘッドレス実行と検証 | GUI以外の公開crate |
 
-現在はcore / config / adb / android / video / vision / runtime / appを実装しています。game-apiはゲーム自動化へ着手するときに追加します。
+現在はcore / config / adb / android / video / vision / game-api / runtime / appを実装しています。具体的なゲームはgame-apiだけに依存する個別crateとして追加します。
 
 ```mermaid
 flowchart TD
@@ -70,6 +70,24 @@ scrcpy sessionを開始すると、専用のblocking workerがvideo socketを読
 最初の認識backendはpure RustのRGB template matcherです。正規化されたROI内を粗く探索し、最良候補の周辺を1pixel単位で再探索します。検出結果はlabel / confidence / center / boundsを持ち、egui previewへ正規化矩形として重ねます。OpenCVは複数templateや高度な処理が必要になった時点で、同じ`Recognizer`境界の内側へ追加します。
 
 入力は容量64件の専用queueで順番に処理します。ADB commandは入力workerだけが実行するため、同時に複数の操作を送りません。停止時は新しい入力を拒否して未実行のqueueを破棄し、実行中のcommandが終了してからworkerを閉じます。
+
+## ゲーム自動化
+
+各ゲームは`GamePlugin`を実装し、安定した`GameId`と表示名を`GameRegistry`へ登録します。初期段階ではpluginをcompile時に組み込みます。動的downloadやnative libraryのloadは扱いません。
+
+`Dispatcher`はゲームごとの`GameState` / `Trigger` / `Task`を所有します。各FrameのtickではTriggerをpriorityの高い順に評価し、`Consume`を返したTriggerでそのtickを終了します。これにより復旧用Triggerが通常Taskの更新をそのtickだけ抑止できます。
+
+Taskは開始 / 更新 / 一時停止 / 再開 / 停止 / 完了の状態を持ちます。ゲーム側はADBへ直接入力せず、正規化座標の`InputIntent`を`DispatchReport`として返します。1回のtickで返せる入力は最大1件です。runtimeは次の縦切りでこの入力を既存の入力queueへ渡します。
+
+```mermaid
+flowchart TD
+    Registry[GameRegistry] --> Plugin[GamePlugin]
+    Plugin --> Dispatcher
+    Dispatcher --> Trigger
+    Dispatcher --> Task
+    Trigger --> Report[DispatchReport]
+    Task --> Report
+```
 
 | 経路 | 方針 |
 |---|---|
