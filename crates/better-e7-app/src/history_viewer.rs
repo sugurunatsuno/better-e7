@@ -69,7 +69,11 @@ impl HistoryViewer {
                     .iter()
                     .filter(|record| self.matches(record))
                     .collect::<Vec<_>>();
-                ui.label(format!("{} / {} records", visible.len(), self.records.len()));
+                ui.label(format!(
+                    "{} / {} records",
+                    visible.len(),
+                    self.records.len()
+                ));
                 ui.separator();
                 egui::ScrollArea::both().show(ui, |ui| {
                     egui::Grid::new("history-grid")
