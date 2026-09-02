@@ -67,7 +67,8 @@ better-e7は、Androidゲーム向けの自動化をPCのOSや端末解像度か
 - 通信 / デコード / 認識の失敗をpanicで終了させず、状態とログへ返す
 - scrcpy-serverの対応バージョンを固定し、アプリと一緒に管理する
 - 外部から取得したゲーム画像やモデルのライセンスを記録する
-- CIでformat / lint / testを3OSで確認する
+- 通常CIはUbuntuでformat / lint / testを確認する
+- Windows / macOSは依存更新やリリース前に手動workflowで確認する
 
 ## 初期リリースの完了条件
 

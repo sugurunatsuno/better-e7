@@ -1,17 +1,24 @@
-name: CI
+name: Cross-platform check
 
 on:
-  push:
-    branches: [main]
-  pull_request:
+  workflow_dispatch:
+    inputs:
+      runner:
+        description: Runner to use
+        required: true
+        default: windows-latest
+        type: choice
+        options:
+          - windows-latest
+          - macos-latest
 
 permissions:
   contents: read
 
 jobs:
   check:
-    name: Check Ubuntu
-    runs-on: ubuntu-latest
+    name: Check ${{ inputs.runner }}
+    runs-on: ${{ inputs.runner }}
 
     steps:
       - uses: actions/checkout@v4
@@ -20,8 +27,6 @@ jobs:
           toolchain: 1.88.0
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-      - name: Format
-        run: cargo fmt --all --check
       - name: Clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - name: Test

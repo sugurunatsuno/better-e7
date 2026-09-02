@@ -5,7 +5,7 @@
 - [x] Cargo workspaceを作る
 - [x] CoreのFrame / 正規化座標 / ポートを定義する
 - [x] eguiアプリの起動骨格を作る
-- [x] 3OSのCIを作る
+- [x] Ubuntuの通常CIと手動のWindows / macOS確認を作る
 - [ ] ログと設定ファイルの形式を決める
 - [ ] Workerの起動 / 停止を管理するruntimeを作る
 
@@ -47,4 +47,3 @@
 - [ ] 外部ライブラリとscrcpyのライセンス表示を作る
 - [ ] 署名 / notarization / Windows signingを検討する
 - [ ] リリースartifactをCIで作る
-
