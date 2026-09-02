@@ -1585,9 +1585,8 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let path = std::env::temp_dir().join(format!(
-            "better-e7-automation-history-{suffix}.jsonl"
-        ));
+        let path =
+            std::env::temp_dir().join(format!("better-e7-automation-history-{suffix}.jsonl"));
         let (worker_event_tx, mut worker_event_rx) = mpsc::unbounded_channel();
         let mut writer = AutomationHistoryWriter::spawn(path.clone(), worker_event_tx).unwrap();
         writer
