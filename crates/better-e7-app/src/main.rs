@@ -29,9 +29,7 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "better-e7",
         options,
-        Box::new(move |creation_context| {
-            Ok(Box::new(BetterE7App::new(creation_context, config)))
-        }),
+        Box::new(move |creation_context| Ok(Box::new(BetterE7App::new(creation_context, config)))),
     )
 }
 

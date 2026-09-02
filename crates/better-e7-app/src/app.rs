@@ -118,7 +118,10 @@ impl BetterE7App {
                     AutomationState::Stopped => "開始",
                     AutomationState::Running => "停止",
                 };
-                if ui.add_enabled(can_toggle, egui::Button::new(label)).clicked() {
+                if ui
+                    .add_enabled(can_toggle, egui::Button::new(label))
+                    .clicked()
+                {
                     let command = match self.automation_state {
                         AutomationState::Stopped => RuntimeCommand::StartAutomation,
                         AutomationState::Running => RuntimeCommand::StopAutomation,
@@ -137,10 +140,7 @@ impl BetterE7App {
                 ui.horizontal(|ui| {
                     ui.heading("端末");
                     if ui
-                        .add_enabled(
-                            self.runtime.is_some(),
-                            egui::Button::new("再読み込み"),
-                        )
+                        .add_enabled(self.runtime.is_some(), egui::Button::new("再読み込み"))
                         .clicked()
                     {
                         self.send(RuntimeCommand::RefreshDevices);
@@ -162,8 +162,7 @@ impl BetterE7App {
                     );
                     if ui
                         .add_enabled(
-                            device.is_ready()
-                                && self.automation_state == AutomationState::Stopped,
+                            device.is_ready() && self.automation_state == AutomationState::Stopped,
                             egui::Button::selectable(is_selected, label),
                         )
                         .clicked()
