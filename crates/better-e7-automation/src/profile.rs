@@ -63,7 +63,9 @@ impl AutomationProfile {
                 )));
             }
             rule.condition.validate()?;
+            rule.condition.validate_references(&template_ids)?;
             rule.action.validate()?;
+            rule.action.validate_references(&template_ids)?;
         }
         Ok(())
     }
@@ -203,6 +205,19 @@ impl Condition {
             Self::Not { condition } => condition.validate(),
         }
     }
+
+    fn validate_references(&self, template_ids: &BTreeSet<&str>) -> Result<(), ProfileError> {
+        match self {
+            Self::Always => Ok(()),
+            Self::DetectionPresent { label, .. } | Self::DetectionAbsent { label, .. } => {
+                validate_template_reference(label, template_ids)
+            }
+            Self::All { conditions } | Self::Any { conditions } => conditions
+                .iter()
+                .try_for_each(|condition| condition.validate_references(template_ids)),
+            Self::Not { condition } => condition.validate_references(template_ids),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
@@ -262,6 +277,29 @@ impl Action {
                 }
             }
         }
+    }
+
+    fn validate_references(&self, template_ids: &BTreeSet<&str>) -> Result<(), ProfileError> {
+        match self {
+            Self::TapDetection { label } => validate_template_reference(label, template_ids),
+            Self::Tap { .. }
+            | Self::Swipe { .. }
+            | Self::Key { .. }
+            | Self::Log { .. } => Ok(()),
+        }
+    }
+}
+
+fn validate_template_reference(
+    label: &str,
+    template_ids: &BTreeSet<&str>,
+) -> Result<(), ProfileError> {
+    if template_ids.contains(label) {
+        Ok(())
+    } else {
+        Err(ProfileError::Invalid(format!(
+            "detection label is not defined as a template: {label}"
+        )))
     }
 }
 
@@ -442,6 +480,29 @@ mod tests {
             invalid_region.validate(),
             Err(ProfileError::Invalid(_))
         ));
+    }
+
+    #[test]
+    fn rejects_undefined_detection_labels() {
+        let mut invalid_condition = rule("condition");
+        invalid_condition.condition = Condition::DetectionPresent {
+            label: "missing".to_owned(),
+            minimum_confidence: 0.9,
+        };
+        let mut invalid_action = rule("action");
+        invalid_action.action = Action::TapDetection {
+            label: "missing".to_owned(),
+        };
+
+        for rule in [invalid_condition, invalid_action] {
+            let profile = AutomationProfile {
+                name: "undefined-label".to_owned(),
+                templates: Vec::new(),
+                rules: vec![rule],
+            };
+            let error = profile.validate().unwrap_err();
+            assert!(error.to_string().contains("missing"));
+        }
     }
 
     fn rule(id: &str) -> AutomationRule {

@@ -26,6 +26,8 @@ Android端末が必要な確認と、通常の自動テストを分けます。
 - Taskの開始 / 一時停止 / 再開 / 完了をmockで検証する
 - 1回のtickで複数の入力が生成された場合はエラーにする
 - AutomationProfileのTOML parse / serialize / validationを検証する
+- Condition / Actionが未定義templateを参照した場合に拒否する
+- profile検証でtemplate assetの欠落を検出する
 - 汎用Ruleをpriority順に評価する
 - 経過時間を直接渡してcooldownを検証する
 - consumeするlog Ruleが低priorityのRuleを止めることを検証する

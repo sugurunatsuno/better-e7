@@ -32,6 +32,7 @@ pub struct BetterE7App {
     recognition_window_started: Instant,
     automation_profile_name: Option<String>,
     automation_profile_path: String,
+    last_profile_validation: Option<String>,
     automation_dry_run: bool,
     offline_frames_directory: String,
     offline_automation_running: bool,
@@ -62,6 +63,7 @@ impl BetterE7App {
                 .as_ref()
                 .map(|path| path.to_string_lossy().into_owned())
                 .unwrap_or_default(),
+            last_profile_validation: None,
             automation_dry_run: config.automation_dry_run,
             offline_frames_directory: String::new(),
             offline_automation_running: false,
@@ -158,6 +160,19 @@ impl BetterE7App {
                     self.config.automation_profile_path = Some(path);
                     self.save_config();
                     self.push_log(format!("自動化profileを変更しました: {name}"));
+                }
+                RuntimeEvent::AutomationProfileValidated {
+                    name,
+                    path,
+                    templates,
+                    rules,
+                } => {
+                    let summary = format!("{name} / {templates} templates / {rules} rules");
+                    self.last_profile_validation = Some(summary.clone());
+                    self.push_log(format!(
+                        "profileを検証しました: {} / {summary}",
+                        path.display()
+                    ));
                 }
                 RuntimeEvent::AutomationDryRunChanged(enabled) => {
                     self.automation_dry_run = enabled;
@@ -298,6 +313,7 @@ impl BetterE7App {
     fn show_devices(&mut self, context: &egui::Context) {
         let mut input_command = None;
         let mut profile_path = None;
+        let mut validation_path = None;
         let mut dry_run = None;
         let mut offline_command = None;
         egui::SidePanel::left("devices")
@@ -402,6 +418,19 @@ impl BetterE7App {
                         profile_path = Some(PathBuf::from(path));
                     }
                 }
+                if ui
+                    .add_enabled(can_configure, egui::Button::new("profileを検証"))
+                    .clicked()
+                {
+                    let path = self.automation_profile_path.trim();
+                    if !path.is_empty() {
+                        validation_path = Some(PathBuf::from(path));
+                    }
+                }
+                ui.label(format!(
+                    "検証結果: {}",
+                    self.last_profile_validation.as_deref().unwrap_or("未実行")
+                ));
                 let mut enabled = self.automation_dry_run;
                 if ui
                     .add_enabled(can_configure, egui::Checkbox::new(&mut enabled, "dry-run"))
@@ -462,6 +491,10 @@ impl BetterE7App {
         }
         if let Some(path) = profile_path {
             self.send(RuntimeCommand::LoadAutomationProfile(path));
+        }
+        if let Some(path) = validation_path {
+            self.last_profile_validation = None;
+            self.send(RuntimeCommand::ValidateAutomationProfile(path));
         }
         if let Some(enabled) = dry_run {
             self.send(RuntimeCommand::SetAutomationDryRun(enabled));

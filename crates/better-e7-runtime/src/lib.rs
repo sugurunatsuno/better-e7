@@ -40,6 +40,7 @@ pub enum RuntimeCommand {
     RefreshDevices,
     SelectDevice(String),
     LoadAutomationProfile(PathBuf),
+    ValidateAutomationProfile(PathBuf),
     SetAutomationDryRun(bool),
     StartAutomation,
     StopAutomation,
@@ -81,6 +82,12 @@ pub enum RuntimeEvent {
         name: String,
         path: PathBuf,
     },
+    AutomationProfileValidated {
+        name: String,
+        path: PathBuf,
+        templates: usize,
+        rules: usize,
+    },
     AutomationDryRunChanged(bool),
     AutomationRuleFired(String),
     AutomationLog(String),
@@ -120,6 +127,14 @@ pub struct OfflineAutomationReport {
 pub struct OfflineAutomationOptions {
     pub frame_interval: Duration,
     pub history_path: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AutomationProfileValidation {
+    pub name: String,
+    pub path: PathBuf,
+    pub templates: usize,
+    pub rules: usize,
 }
 
 impl Default for OfflineAutomationOptions {
@@ -260,6 +275,21 @@ fn build_automation(config: &AppConfig) -> Result<BuiltAutomation, RuntimeError>
 fn build_profile_automation(profile_path: &Path) -> Result<BuiltAutomation, RuntimeError> {
     let profile = AutomationProfile::load(profile_path)
         .map_err(|error| RuntimeError::AutomationProfile(error.to_string()))?;
+    let recognizers = build_profile_recognizers(profile_path, &profile)?;
+    let profile_name = profile.name.clone();
+    let engine = AutomationEngine::new(profile)
+        .map_err(|error| RuntimeError::AutomationProfile(error.to_string()))?;
+    Ok(BuiltAutomation {
+        recognizer: Some(Arc::new(recognizers)),
+        engine: Some(engine),
+        profile_name: Some(profile_name),
+    })
+}
+
+fn build_profile_recognizers(
+    profile_path: &Path,
+    profile: &AutomationProfile,
+) -> Result<RecognizerSet, RuntimeError> {
     let mut recognizers = RecognizerSet::new();
     for template in &profile.templates {
         let path = resolve_profile_asset(profile_path, &template.path);
@@ -271,16 +301,30 @@ fn build_profile_automation(profile_path: &Path) -> Result<BuiltAutomation, Runt
                 .normalized_region()
                 .map_err(|error| RuntimeError::AutomationProfile(error.to_string()))?,
         )
-        .map_err(|error| RuntimeError::Recognition(error.to_string()))?;
+        .map_err(|error| {
+            RuntimeError::Recognition(format!(
+                "failed to load template {} from {}: {error}",
+                template.id,
+                path.display()
+            ))
+        })?;
         recognizers.add(matcher);
     }
-    let profile_name = profile.name.clone();
-    let engine = AutomationEngine::new(profile)
+    Ok(recognizers)
+}
+
+pub fn validate_automation_profile(
+    profile_path: impl AsRef<Path>,
+) -> Result<AutomationProfileValidation, RuntimeError> {
+    let profile_path = profile_path.as_ref();
+    let profile = AutomationProfile::load(profile_path)
         .map_err(|error| RuntimeError::AutomationProfile(error.to_string()))?;
-    Ok(BuiltAutomation {
-        recognizer: Some(Arc::new(recognizers)),
-        engine: Some(engine),
-        profile_name: Some(profile_name),
+    build_profile_recognizers(profile_path, &profile)?;
+    Ok(AutomationProfileValidation {
+        name: profile.name,
+        path: profile_path.to_owned(),
+        templates: profile.templates.len(),
+        rules: profile.rules.len(),
     })
 }
 
@@ -838,6 +882,42 @@ async fn run_coordinator(
                                 &event_tx,
                                 RuntimeEvent::Error(format!(
                                     "profile loader failed: {error}"
+                                )),
+                            ),
+                        }
+                    }
+                    RuntimeCommand::ValidateAutomationProfile(path) => {
+                        if connection_state != ConnectionState::Disconnected
+                            || offline_worker_stop.is_some()
+                        {
+                            send_event(
+                                &event_tx,
+                                RuntimeEvent::Error(
+                                    "stop automation before validating a profile".to_owned(),
+                                ),
+                            );
+                            continue;
+                        }
+                        let result =
+                            tokio::task::spawn_blocking(move || validate_automation_profile(path))
+                                .await;
+                        match result {
+                            Ok(Ok(validation)) => send_event(
+                                &event_tx,
+                                RuntimeEvent::AutomationProfileValidated {
+                                    name: validation.name,
+                                    path: validation.path,
+                                    templates: validation.templates,
+                                    rules: validation.rules,
+                                },
+                            ),
+                            Ok(Err(error)) => {
+                                send_event(&event_tx, RuntimeEvent::Error(error.to_string()));
+                            }
+                            Err(error) => send_event(
+                                &event_tx,
+                                RuntimeEvent::Error(format!(
+                                    "profile validation worker failed: {error}"
                                 )),
                             ),
                         }
@@ -1969,6 +2049,7 @@ mod tests {
             .unwrap();
         fs::write(frames_directory.join("ignored.txt"), "not an image").unwrap();
 
+        let validation = validate_automation_profile(&profile_path).unwrap();
         let paths = discover_offline_frames(&frames_directory).unwrap();
         let report = run_offline_automation(
             &profile_path,
@@ -1982,6 +2063,9 @@ mod tests {
 
         assert_eq!(paths[0].file_name().unwrap().to_string_lossy(), "01.png");
         assert_eq!(paths[1].file_name().unwrap().to_string_lossy(), "02.png");
+        assert_eq!(validation.name, "offline-profile");
+        assert_eq!(validation.templates, 0);
+        assert_eq!(validation.rules, 1);
         assert_eq!(report.profile_name, "offline-profile");
         assert_eq!(report.processed_frames, 2);
         assert!(!report.stopped);
@@ -2011,6 +2095,33 @@ mod tests {
         assert_eq!(records[0]["event"], "rule_fired");
         assert_eq!(records[1]["event"], "input_planned");
         assert_eq!(records[2]["session_elapsed_ms"], 100);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn profile_validation_loads_template_assets() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("better-e7-validation-{suffix}"));
+        let profile_path = root.join("automation.toml");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            &profile_path,
+            r#"
+                name = "missing-asset"
+
+                [[templates]]
+                id = "confirm"
+                path = "missing.png"
+            "#,
+        )
+        .unwrap();
+
+        let error = validate_automation_profile(&profile_path).unwrap_err();
+
+        assert!(error.to_string().contains("missing.png"));
         fs::remove_dir_all(root).unwrap();
     }
 

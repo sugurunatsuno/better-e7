@@ -84,13 +84,15 @@ label = "confirm"
 | key | Android key codeを送る |
 | log | 入力せずmessageを記録する |
 
-座標は0.0から1.0で指定します。不正な座標 / 重複ID / 空のlabel / 空のCondition groupはprofileの読み込み時に拒否します。
+座標は0.0から1.0で指定します。不正な座標 / 重複ID / 空のlabel / 空のCondition group / 未定義templateの参照はprofileの読み込み時に拒否します。
 
 ## Runtimeでの実行
 
 `better-e7.toml`の`automation_profile_path`へprofileを指定します。開始時にengineのcooldown状態をresetし、認識結果ごとに1回tickします。生成された入力は手動入力と同じ順序付きqueueを通り、GUIには実行Rule / profileのlog / 最後に実行したRuleを表示します。
 
 GUIでは停止中にprofile pathを変更できます。dry-runを有効にすると入力をqueueへ送らず、予定入力だけを表示します。
+
+profileを検証を押すと、TOMLの構造、Ruleの参照、template assetの読み込みをAndroidへ接続せずに確認します。成功時はprofile名とtemplate / Ruleの件数を表示し、失敗時は対象pathを含むエラーをログへ表示します。
 
 profileにtemplateがなくてもRule engineは動きます。この構成は`always`や固定座標のActionをmock Frameで検証するときに使えます。rule editorは今後の実装範囲です。
 
