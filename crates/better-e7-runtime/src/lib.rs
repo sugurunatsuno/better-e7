@@ -2,7 +2,7 @@ use std::{
     error::Error,
     fmt,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
     time::Duration,
@@ -11,6 +11,8 @@ use std::{
 use better_e7_adb::{AdbClient, AdbDevice, DeviceLister};
 use better_e7_android::{ActiveVideoSession, ScrcpySessionFactory, VideoSessionFactory};
 use better_e7_config::AppConfig;
+use better_e7_core::Frame;
+use better_e7_video::{FfmpegProcessDecoderFactory, VideoDecoder, VideoDecoderFactory};
 use tokio::{
     runtime::{Builder, Runtime},
     sync::mpsc,
@@ -55,6 +57,7 @@ pub enum RuntimeEvent {
 pub struct AppRuntime {
     command_tx: mpsc::UnboundedSender<RuntimeCommand>,
     event_rx: mpsc::UnboundedReceiver<RuntimeEvent>,
+    latest_frame: Arc<Mutex<Option<Frame>>>,
     _runtime: Runtime,
 }
 
@@ -70,11 +73,17 @@ impl AppRuntime {
         let lister: Arc<dyn DeviceLister> = Arc::new(AdbClient::new(config.adb_path.clone()));
         let session_factory: Arc<dyn VideoSessionFactory> =
             Arc::new(ScrcpySessionFactory::new(config));
+        let decoder_factory: Arc<dyn VideoDecoderFactory> = Arc::new(
+            FfmpegProcessDecoderFactory::new(config.ffmpeg_path.clone()),
+        );
+        let latest_frame = Arc::new(Mutex::new(None));
         let refresh_interval = Duration::from_millis(config.device_refresh_interval_ms);
 
         let _coordinator = runtime.spawn(run_coordinator(
             lister,
             session_factory,
+            decoder_factory,
+            Arc::clone(&latest_frame),
             refresh_interval,
             command_rx,
             event_tx,
@@ -83,6 +92,7 @@ impl AppRuntime {
         Ok(Self {
             command_tx,
             event_rx,
+            latest_frame,
             _runtime: runtime,
         })
     }
@@ -96,6 +106,10 @@ impl AppRuntime {
     pub fn try_next_event(&mut self) -> Option<RuntimeEvent> {
         self.event_rx.try_recv().ok()
     }
+
+    pub fn take_latest_frame(&self) -> Option<Frame> {
+        self.latest_frame.lock().ok()?.take()
+    }
 }
 
 impl Drop for AppRuntime {
@@ -107,6 +121,8 @@ impl Drop for AppRuntime {
 async fn run_coordinator(
     lister: Arc<dyn DeviceLister>,
     session_factory: Arc<dyn VideoSessionFactory>,
+    decoder_factory: Arc<dyn VideoDecoderFactory>,
+    latest_frame: Arc<Mutex<Option<Frame>>>,
     refresh_interval: Duration,
     mut command_rx: mpsc::UnboundedReceiver<RuntimeCommand>,
     event_tx: mpsc::UnboundedSender<RuntimeEvent>,
@@ -220,6 +236,8 @@ async fn run_coordinator(
                                 let stop = Arc::new(AtomicBool::new(false));
                                 spawn_video_worker(
                                     session,
+                                    Arc::clone(&decoder_factory),
+                                    Arc::clone(&latest_frame),
                                     Arc::clone(&stop),
                                     worker_event_tx.clone(),
                                 );
@@ -322,12 +340,22 @@ async fn refresh_devices(
 
 fn spawn_video_worker(
     mut session: Box<dyn ActiveVideoSession>,
+    decoder_factory: Arc<dyn VideoDecoderFactory>,
+    latest_frame: Arc<Mutex<Option<Frame>>>,
     stop: Arc<AtomicBool>,
     worker_event_tx: mpsc::UnboundedSender<VideoWorkerEvent>,
 ) {
     let _worker = tokio::task::spawn_blocking(move || {
         let mut buffer = vec![0_u8; VIDEO_BUFFER_SIZE];
         let mut total_bytes = 0_u64;
+        let mut decoder = match decoder_factory.create() {
+            Ok(decoder) => decoder,
+            Err(error) => {
+                let _ = session.stop();
+                let _ = worker_event_tx.send(VideoWorkerEvent::Ended(Err(error.to_string())));
+                return;
+            }
+        };
         let result = loop {
             if stop.load(Ordering::Acquire) {
                 break Ok(());
@@ -337,15 +365,34 @@ fn spawn_video_worker(
                 Ok(bytes_read) => {
                     total_bytes = total_bytes.saturating_add(bytes_read as u64);
                     let _ = worker_event_tx.send(VideoWorkerEvent::Progress(total_bytes));
+                    if let Err(error) = decoder.push(&buffer[..bytes_read]) {
+                        break Err(error.to_string());
+                    }
                 }
                 Err(error) if error.is_retryable() => {}
                 Err(error) => break Err(error.to_string()),
+            }
+            if let Err(error) = store_decoded_frames(decoder.as_mut(), &latest_frame) {
+                break Err(error);
             }
         };
 
         let result = result.and_then(|()| session.stop().map_err(|error| error.to_string()));
         let _ = worker_event_tx.send(VideoWorkerEvent::Ended(result));
     });
+}
+
+fn store_decoded_frames(
+    decoder: &mut dyn VideoDecoder,
+    latest_frame: &Mutex<Option<Frame>>,
+) -> Result<(), String> {
+    while let Some(frame) = decoder.try_next_frame().map_err(|error| error.to_string())? {
+        let mut slot = latest_frame
+            .lock()
+            .map_err(|_| "latest frame store is unavailable".to_owned())?;
+        *slot = Some(frame);
+    }
+    Ok(())
 }
 
 fn request_video_stop(stop: Option<&Arc<AtomicBool>>) {
@@ -384,5 +431,45 @@ impl Error for RuntimeError {
             Self::Build(error) => Some(error),
             Self::Stopped => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{collections::VecDeque, time::Instant};
+
+    use better_e7_core::PixelFormat;
+    use better_e7_video::VideoDecodeError;
+
+    use super::*;
+
+    struct MockDecoder {
+        frames: VecDeque<Frame>,
+    }
+
+    impl VideoDecoder for MockDecoder {
+        fn push(&mut self, _data: &[u8]) -> Result<(), VideoDecodeError> {
+            Ok(())
+        }
+
+        fn try_next_frame(&mut self) -> Result<Option<Frame>, VideoDecodeError> {
+            Ok(self.frames.pop_front())
+        }
+    }
+
+    #[test]
+    fn keeps_only_the_latest_decoded_frame() {
+        let frames = [1_u64, 2]
+            .into_iter()
+            .map(|id| {
+                Frame::new(id, Instant::now(), 1, 1, PixelFormat::Rgb8, vec![0; 3]).unwrap()
+            })
+            .collect();
+        let mut decoder = MockDecoder { frames };
+        let latest = Mutex::new(None);
+
+        store_decoded_frames(&mut decoder, &latest).unwrap();
+
+        assert_eq!(latest.lock().unwrap().as_ref().unwrap().id(), 2);
     }
 }

@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use better_e7_adb::AdbDevice;
 use better_e7_config::AppConfig;
+use better_e7_core::{Frame, PixelFormat};
 use better_e7_runtime::{
     AppRuntime, AutomationState, ConnectionState, RuntimeCommand, RuntimeEvent,
 };
@@ -17,6 +18,8 @@ pub struct BetterE7App {
     automation_state: AutomationState,
     connection_state: ConnectionState,
     video_bytes_received: u64,
+    preview_texture: Option<egui::TextureHandle>,
+    preview_resolution: Option<[usize; 2]>,
     logs: Vec<String>,
 }
 
@@ -29,6 +32,8 @@ impl BetterE7App {
             automation_state: AutomationState::Stopped,
             connection_state: ConnectionState::Disconnected,
             video_bytes_received: 0,
+            preview_texture: None,
+            preview_resolution: None,
             logs: vec!["better-e7を起動しました".to_owned()],
         };
 
@@ -45,7 +50,7 @@ impl BetterE7App {
         app
     }
 
-    fn drain_runtime_events(&mut self) {
+    fn drain_runtime_events(&mut self, context: &egui::Context) {
         let events = self
             .runtime
             .as_mut()
@@ -80,6 +85,8 @@ impl BetterE7App {
                     self.connection_state = state;
                     if state == ConnectionState::Connecting {
                         self.video_bytes_received = 0;
+                        self.preview_texture = None;
+                        self.preview_resolution = None;
                     }
                     self.push_log(match state {
                         ConnectionState::Disconnected => "映像接続を終了しました",
@@ -97,6 +104,34 @@ impl BetterE7App {
                 }
             }
         }
+
+        let latest_frame = self
+            .runtime
+            .as_ref()
+            .and_then(AppRuntime::take_latest_frame);
+        if let Some(frame) = latest_frame {
+            self.update_preview_texture(context, &frame);
+        }
+    }
+
+    fn update_preview_texture(&mut self, context: &egui::Context, frame: &Frame) {
+        let size = [frame.width() as usize, frame.height() as usize];
+        let image = match frame.format() {
+            PixelFormat::Rgb8 => egui::ColorImage::from_rgb(size, frame.pixels()),
+            PixelFormat::Rgba8 => {
+                egui::ColorImage::from_rgba_unmultiplied(size, frame.pixels())
+            }
+        };
+        if let Some(texture) = self.preview_texture.as_mut() {
+            texture.set(image, egui::TextureOptions::LINEAR);
+        } else {
+            self.preview_texture = Some(context.load_texture(
+                "android-preview",
+                image,
+                egui::TextureOptions::LINEAR,
+            ));
+        }
+        self.preview_resolution = Some(size);
     }
 
     fn send(&mut self, command: RuntimeCommand) {
@@ -218,19 +253,35 @@ impl BetterE7App {
             );
             ui.painter()
                 .rect_filled(rect, 6.0, egui::Color32::from_gray(24));
-            let preview_message = match self.connection_state {
-                ConnectionState::Disconnected => "Android映像は未接続です",
-                ConnectionState::Connecting => "Android映像へ接続しています",
-                ConnectionState::Connected => "H.264 streamを受信しています",
-                ConnectionState::Disconnecting => "Android映像を切断しています",
-            };
-            ui.painter().text(
-                rect.center(),
-                egui::Align2::CENTER_CENTER,
-                preview_message,
-                egui::FontId::proportional(22.0),
-                egui::Color32::GRAY,
-            );
+            if let Some(texture) = &self.preview_texture {
+                let texture_size = texture.size_vec2();
+                let scale = (rect.width() / texture_size.x)
+                    .min(rect.height() / texture_size.y);
+                let image_rect = egui::Rect::from_center_size(
+                    rect.center(),
+                    texture_size * scale,
+                );
+                ui.painter().image(
+                    texture.id(),
+                    image_rect,
+                    egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
+                    egui::Color32::WHITE,
+                );
+            } else {
+                let preview_message = match self.connection_state {
+                    ConnectionState::Disconnected => "Android映像は未接続です",
+                    ConnectionState::Connecting => "Android映像へ接続しています",
+                    ConnectionState::Connected => "最初の映像frameを待っています",
+                    ConnectionState::Disconnecting => "Android映像を切断しています",
+                };
+                ui.painter().text(
+                    rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    preview_message,
+                    egui::FontId::proportional(22.0),
+                    egui::Color32::GRAY,
+                );
+            }
             ui.separator();
             ui.heading("状態");
             ui.label(format!(
@@ -239,6 +290,11 @@ impl BetterE7App {
             ));
             ui.label("認識FPS: --");
             ui.label(format!("受信量: {} bytes", self.video_bytes_received));
+            let resolution = self
+                .preview_resolution
+                .map(|[width, height]| format!("{width} x {height}"))
+                .unwrap_or_else(|| "--".to_owned());
+            ui.label(format!("映像解像度: {resolution}"));
             ui.label("ゲーム状態: Unknown");
         });
     }
@@ -262,7 +318,7 @@ impl BetterE7App {
 
 impl eframe::App for BetterE7App {
     fn update(&mut self, context: &egui::Context, _frame: &mut eframe::Frame) {
-        self.drain_runtime_events();
+        self.drain_runtime_events(context);
         self.show_toolbar(context);
         self.show_devices(context);
         self.show_preview(context);

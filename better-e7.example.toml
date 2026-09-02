@@ -1,4 +1,5 @@
 adb_path = "adb"
+ffmpeg_path = "ffmpeg"
 device_refresh_interval_ms = 2000
 scrcpy_server_path = "third_party/scrcpy/scrcpy-server-v4.1"
 scrcpy_local_port = 27183

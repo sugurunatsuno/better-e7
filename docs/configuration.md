@@ -4,6 +4,7 @@
 
 ```toml
 adb_path = "adb"
+ffmpeg_path = "ffmpeg"
 device_refresh_interval_ms = 2000
 scrcpy_server_path = "third_party/scrcpy/scrcpy-server-v4.1"
 scrcpy_local_port = 27183
@@ -25,6 +26,10 @@ adb_path = "C:/Android/platform-tools/adb.exe"
 端末一覧を更新する間隔です。単位はミリ秒で、最小値は250です。通常は初期値の2000で十分です。
 
 未知の設定項目や不正な値がある場合は設定を採用せず、初期値で起動してエラーをログへ出します。
+
+## ffmpeg_path
+
+FFmpeg実行ファイルのパスです。PATHから実行できる場合は`ffmpeg`のまま使えます。PATHにない場合は絶対パスを指定します。初期実装はH.264を標準入力へ渡し、標準出力のPPM streamをRGB Frameへ変換します。
 
 ## scrcpy_server_path
 

@@ -6,8 +6,9 @@
 - rustfmt / Clippy
 - Android Platform Tools
 - 対応バージョンのscrcpy-server
+- FFmpeg
 
-FFmpeg / OpenCV / ONNX Runtimeは、それぞれを使うcrateへ着手するときに追加します。CoreとGUI骨格の開発には不要です。
+FFmpegは映像プレビューの実行時に必要です。通常の単体テストは模擬PPM streamを使うため、FFmpegやAndroid端末なしで実行できます。OpenCV / ONNX Runtimeは、それぞれを使うcrateへ着手するときに追加します。
 
 ## 初回確認
 
@@ -21,6 +22,8 @@ cargo run -p better-e7-app
 ADBがPATHにない場合は`better-e7.toml`の`adb_path`を変更してください。書式は [configuration.md](configuration.md) にあります。
 
 実機で映像接続を確認するときは、`third_party/scrcpy/README.md`に記載したscrcpy-server v4.1を配置します。通常の単体テストではserver binaryもAndroid端末も不要です。
+
+FFmpegがPATHにない場合は`better-e7.toml`の`ffmpeg_path`を変更します。
 
 ## 実装の進め方
 

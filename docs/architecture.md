@@ -23,7 +23,7 @@ flowchart TD
 | better-e7-core | Frame / 座標 / ポート / 共通エラー | Rust標準ライブラリ |
 | better-e7-config | TOML設定の読み書きと検証 | serde / toml |
 | better-e7-adb | ADB process / 端末一覧 / 入力 | Rust標準ライブラリ |
-| better-e7-runtime | Worker / command / event / 状態管理 | config / adb / Tokio |
+| better-e7-runtime | Worker / command / event / 最新Frame管理 | config / adb / video / Tokio |
 | better-e7-android | scrcpy-server起動 / transport / control | core / adb / Tokio |
 | better-e7-video | ストリーム解析 / デコード / 色変換 | core / FFmpeg |
 | better-e7-vision | テンプレート / 色 / OCR / ONNX | core / OpenCV / ort |
@@ -59,7 +59,9 @@ GUIスレッドではブロッキング処理を行いません。Tokio runtime�
 
 現在のruntimeはeguiからcommandを受け、ADB端末一覧 / 選択端末 / 自動化状態をeventとして返します。ADB processは`spawn_blocking`で実行するためGUIスレッドを止めません。
 
-scrcpy sessionを開始すると、専用のblocking workerがvideo socketを読み続けます。停止flagは500msごとに確認でき、終了時はsocket / server process / ADB forwardの順に片付けます。受信量だけをGUIへ通知し、H.264の内容は次のdecoder実装へ渡せる状態にします。
+scrcpy sessionを開始すると、専用のblocking workerがvideo socketを読み続けます。停止flagは500msごとに確認でき、終了時はsocket / server process / ADB forwardの順に片付けます。H.264は外部FFmpeg processの標準入力へ送り、標準出力のPPM streamを`Frame`へ変換します。FFmpegの具象実装は`VideoDecoder`の内側に閉じ込め、将来FFI backendへ交換できるようにします。
+
+デコード済みFrameはruntimeのlatest frame slotへ保存します。GUIが取得する前に次のFrameが届いた場合は古いFrameを置き換え、遅延やメモリ増加を防ぎます。eguiはRGB / RGBAをtextureへ変換し、縦横比を維持してpreviewへ表示します。
 
 | 経路 | 方針 |
 |---|---|

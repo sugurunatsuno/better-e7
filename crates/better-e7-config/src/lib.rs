@@ -8,6 +8,7 @@ const MINIMUM_REFRESH_INTERVAL_MS: u64 = 250;
 #[serde(default, deny_unknown_fields)]
 pub struct AppConfig {
     pub adb_path: PathBuf,
+    pub ffmpeg_path: PathBuf,
     pub device_refresh_interval_ms: u64,
     pub scrcpy_server_path: PathBuf,
     pub scrcpy_local_port: u16,
@@ -18,6 +19,7 @@ impl Default for AppConfig {
     fn default() -> Self {
         Self {
             adb_path: PathBuf::from("adb"),
+            ffmpeg_path: PathBuf::from("ffmpeg"),
             device_refresh_interval_ms: 2_000,
             scrcpy_server_path: PathBuf::from("third_party/scrcpy/scrcpy-server-v4.1"),
             scrcpy_local_port: 27_183,
@@ -53,6 +55,11 @@ impl AppConfig {
     }
 
     fn validate(&self) -> Result<(), ConfigError> {
+        if self.ffmpeg_path.as_os_str().is_empty() {
+            return Err(ConfigError::Invalid(
+                "ffmpeg_path must not be empty".to_owned(),
+            ));
+        }
         if self.device_refresh_interval_ms < MINIMUM_REFRESH_INTERVAL_MS {
             return Err(ConfigError::Invalid(format!(
                 "device_refresh_interval_ms must be at least {MINIMUM_REFRESH_INTERVAL_MS}"
@@ -114,6 +121,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(config.adb_path, PathBuf::from("/opt/android/adb"));
+        assert_eq!(config.ffmpeg_path, PathBuf::from("ffmpeg"));
         assert_eq!(config.device_refresh_interval_ms, 1_500);
         assert_eq!(
             config.scrcpy_server_path,
@@ -124,6 +132,12 @@ mod tests {
     #[test]
     fn rejects_an_interval_that_is_too_short() {
         let result = AppConfig::from_toml("device_refresh_interval_ms = 100");
+        assert!(matches!(result, Err(ConfigError::Invalid(_))));
+    }
+
+    #[test]
+    fn rejects_an_empty_ffmpeg_path() {
+        let result = AppConfig::from_toml("ffmpeg_path = \"\"");
         assert!(matches!(result, Err(ConfigError::Invalid(_))));
     }
 }
