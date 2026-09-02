@@ -414,7 +414,7 @@ struct DeviceRefreshState<'a> {
 async fn refresh_devices(
     lister: Arc<dyn DeviceLister>,
     event_tx: &mpsc::UnboundedSender<RuntimeEvent>,
-    mut state: DeviceRefreshState<'_>,
+    state: DeviceRefreshState<'_>,
 ) {
     let result = tokio::task::spawn_blocking(move || lister.list_devices()).await;
     match result {
