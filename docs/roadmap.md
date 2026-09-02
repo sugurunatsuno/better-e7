@@ -33,12 +33,25 @@
 - [x] 検出overlayをeguiへ表示する
 - [ ] 録画を使った回帰テストを作る
 
-## ゲーム自動化
+## 汎用自動化
+
+- [x] TOMLのAutomationProfileを作る
+- [x] Condition / Action / Rule engineを作る
+- [x] priority / cooldown / consumeを作る
+- [x] 1 tickにつき入力を1件へ制限する
+- [ ] profile内で複数templateを定義できるようにする
+- [ ] runtimeの認識結果と入力queueへ接続する
+- [ ] GUIでprofileの選択 / 開始 / 停止を操作できるようにする
+- [ ] rule editorとdry-runを作る
+- [ ] 実行履歴を保存できるようにする
+
+## ゲーム別拡張
 
 - [x] game-api crateを作る
 - [x] GameState / Trigger / Task / Dispatcherを作る
 - [x] 複数ゲームを登録するGameRegistryを作る
 - [x] 1 tickにつき入力を1件へ制限する
+- [ ] 汎用自動化の縦切りが完了するまで追加実装を保留する
 - [ ] 例示用ゲームプラグインを作る
 - [ ] 設定 / asset / taskの読み込みを作る
 - [ ] 復旧Triggerと優先度制御を作る

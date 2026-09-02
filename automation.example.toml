@@ -1,0 +1,31 @@
+name = "confirm-and-recover"
+
+[[rules]]
+id = "confirm"
+priority = 100
+cooldown_ms = 1000
+consume = true
+
+[rules.condition]
+type = "detection_present"
+label = "confirm"
+minimum_confidence = 0.9
+
+[rules.action]
+type = "tap_detection"
+label = "confirm"
+
+[[rules]]
+id = "return-home"
+priority = 10
+cooldown_ms = 3000
+consume = true
+
+[rules.condition]
+type = "detection_absent"
+label = "confirm"
+minimum_confidence = 0.9
+
+[rules.action]
+type = "key"
+android_key_code = 4

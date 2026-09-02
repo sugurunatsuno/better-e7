@@ -22,6 +22,7 @@ flowchart TD
 |---|---|---|
 | better-e7-core | Frame / 座標 / ポート / 共通エラー | Rust標準ライブラリ |
 | better-e7-config | TOML設定の読み書きと検証 | serde / toml |
+| better-e7-automation | 汎用profile / Condition / Action / Rule engine | core / serde / toml |
 | better-e7-adb | ADB process / 端末一覧 / 入力 | core / Rust標準ライブラリ |
 | better-e7-runtime | Worker / command / event / 最新Frame / 入力queue / 認識worker | config / core / adb / video / vision / Tokio |
 | better-e7-android | scrcpy-server起動 / transport / control | core / adb / Tokio |
@@ -31,7 +32,7 @@ flowchart TD
 | better-e7-app | GUI / 構成 / 各処理の起動と停止 | 全公開crate / egui |
 | better-e7-cli | ヘッドレス実行と検証 | GUI以外の公開crate |
 
-現在はcore / config / adb / android / video / vision / game-api / runtime / appを実装しています。具体的なゲームはgame-apiだけに依存する個別crateとして追加します。
+現在はcore / config / automation / adb / android / video / vision / game-api / runtime / appを実装しています。開発の中心は汎用AutomationProfileとし、具体的なゲームcrateは汎用機能が不足した場合だけ追加します。
 
 ```mermaid
 flowchart TD
@@ -88,6 +89,14 @@ flowchart TD
     Trigger --> Report[DispatchReport]
     Task --> Report
 ```
+
+## 汎用AutomationProfile
+
+`better-e7-automation`はゲーム名を含まない宣言型profileを読み込みます。各RuleはCondition / Action / priority / cooldown / consumeを持ちます。Conditionは認識labelの有無を`all` / `any` / `not`で組み合わせられます。Actionは検出中心のtap / 固定座標のtap / swipe / Android key / logを扱います。
+
+Ruleはpriorityの高い順に評価します。cooldown中のRuleと無効なRuleは飛ばします。入力Actionを1件生成した時点でtickを終了するため、同じFrameから複数の入力は生成しません。log Actionは`consume = false`にすると低priorityのRuleを続けて評価できます。
+
+engineへ渡す時間は外部で管理します。単体テストでは任意の経過時間を渡せるため、待機やsleepを使わずcooldownを検証できます。runtimeへ接続するときはsession開始時刻からの単調増加時間を渡します。
 
 | 経路 | 方針 |
 |---|---|

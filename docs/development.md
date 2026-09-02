@@ -44,6 +44,8 @@ flowchart LR
 
 ゲーム固有crateは`better-e7-game-api`と必要なasset定義だけに依存させます。ADB / scrcpy / FFmpeg / eguiへ直接依存させません。`GamePlugin`がゲームごとの`Dispatcher`を生成し、入力は`DispatchReport`からruntimeへ渡します。
 
+新しい自動化は、まず`AutomationProfile`のConditionとActionで表現できるか確認します。表現できない場合はゲーム固有実装を作る前に、再利用できるCondition / Actionとして`better-e7-automation`へ追加します。
+
 実機では映像接続後にpreviewをclickすると、その位置をADB tapとして送ります。左panelのHome / Back / 上へswipeからキー入力とswipeも確認できます。停止操作の後は入力queueが閉じるため、新しい操作は送信されません。
 
 ## 外部依存を追加する基準

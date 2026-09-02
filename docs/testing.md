@@ -22,6 +22,12 @@ Android端末が必要な確認と、通常の自動テストを分けます。
 - 消費されたtickでは実行中Taskを更新しない
 - Taskの開始 / 一時停止 / 再開 / 完了をmockで検証する
 - 1回のtickで複数の入力が生成された場合はエラーにする
+- AutomationProfileのTOML parse / serialize / validationを検証する
+- 汎用Ruleをpriority順に評価する
+- 経過時間を直接渡してcooldownを検証する
+- consumeするlog Ruleが低priorityのRuleを止めることを検証する
+- all / any / notを組み合わせたConditionを検証する
+- tap_detectionが最もconfidenceの高い検出位置を使うことを検証する
 
 このテストはUbuntu CIで実行し、ADB / scrcpy-server / FFmpegを必要としません。
 
