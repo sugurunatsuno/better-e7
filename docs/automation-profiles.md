@@ -96,7 +96,9 @@ profileを検証を押すと、TOMLの構造、Ruleの参照、template assetの
 
 rule editorではTemplateのID / 画像path / threshold / ROIと、RuleのCondition / Action / priority / cooldown / consumeを編集できます。Conditionはall / any / notを入れ子にできます。検証して保存を押すと、参照とassetの読み込みに成功した場合だけTOMLを保存します。保存後に実行内容を変更する場合は、profileを読み込むを押します。
 
-profileにtemplateがなくてもRule engineは動きます。この構成は`always`や固定座標のActionをmock Frameで検証するときに使えます。rule editorは今後の実装範囲です。
+profileにtemplateがなくてもRule engineは動きます。この構成は`always`や固定座標のActionをmock Frameで検証するときに使えます。
+
+画面へ操作を配置する編集、順序付きタスク、状態モデル、OCRは[タスク作成GUIの作業指示書](task-studio/requirements.md)にまとめています。そこで定義するv2形式は実装前であり、現在のloaderでは読み込めません。
 
 `automation_history_path`を設定すると、Ruleの発火と入力の処理結果をJSONLへ追記します。dry-runでは`input_planned`、通常実行では`input_queued`として区別します。
 

@@ -59,6 +59,8 @@ cargo run -p better-e7-app
 
 汎用profileの書き方は [docs/automation-profiles.md](docs/automation-profiles.md) にあります。
 
+新機能のタスク作成GUIについて、[要件と操作仕様](docs/task-studio/requirements.md) / [設計](docs/task-studio/design.md) / [データ形式](docs/task-studio/schema.md) / [実装計画](docs/task-studio/implementation-plan.md)を作業指示書としてまとめています。画面への操作配置、実操作の記録、状態モデル編集、OCRを対象とし、現在は実装前です。
+
 通常CIはUbuntuだけで実行します。Windows / macOSの確認は必要な場合だけ手動workflowを使います。
 
 ## ライセンス
